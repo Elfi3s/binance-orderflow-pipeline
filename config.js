@@ -3,7 +3,7 @@ import path from 'path';
 
 export const config = {
   symbol: 'ETHUSDT',
-  interval: '4h',
+  interval: '15m',
   
   // Binance WebSocket URLs
   wsUrls: {
@@ -24,7 +24,7 @@ export const config = {
   domDepth: 20, // Top 20 levels for DOM
   
   // Output settings (Windows paths)
-  outputPath: path.resolve('.\\data\\snapshots'),
-  logPath: path.resolve('.\\logs'),
-  logLevel: 'info'
+outputPath: path.resolve('./data/snapshots'),
+logPath: path.resolve('./logs'),
+logLevel: 'info'
 };

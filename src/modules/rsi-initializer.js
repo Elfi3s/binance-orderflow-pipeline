@@ -50,8 +50,7 @@ export class RSIInitializer {
   async fetchHistoricalKlines(limit) {
     try {
       // Get the last N completed 4H klines
-      const url = `${config.restUrls.futures}/fapi/v1/klines?symbol=${this.symbol}&interval=4h&limit=${limit}`;
-      
+      const url = `${config.restUrls.futures}/fapi/v1/klines?symbol=${this.symbol}&interval=${config.interval}&limit=${limit}`;
       console.log(chalk.gray('🔗 Fetching from:'), url);
       
       const response = await fetch(url);

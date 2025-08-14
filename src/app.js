@@ -37,15 +37,15 @@ class BinanceOrderFlowPipeline {
         this.cvdAnalyzer = new CVDAnalyzer();
         this.whaleDetector = new WhaleDetector();
         this.signalEngine = new SignalEngine();
-this.volumeProfile = new VolumeProfile();
-this.reliabilityScorer = new ReliabilityScorer();
-this.checklist = new Checklist();
-globalThis.TICK_SIZE = config.tickSize;
+        this.volumeProfile = new VolumeProfile();
+        this.reliabilityScorer = new ReliabilityScorer();
+        this.checklist = new Checklist();
+        globalThis.TICK_SIZE = config.tickSize;
 
         // Ensure output directories exist (Windows)
         this.ensureDirectories();
 
-        console.log(chalk.blue('🚀 Initializing Binance Order Flow Pipeline (Windows) - Phase 3 Complete'));
+        console.log(chalk.blue(`🚀 Initializing Binance Order Flow Pipeline (${config.interval.toUpperCase()}) - Phase 3 Complete`));
         console.log(chalk.gray(`Symbol: ${config.symbol}, Interval: ${config.interval}`));
         console.log(chalk.gray(`RSI Period: ${config.rsiPeriod}, Imbalance Threshold: ${config.imbalanceThreshold}x`));
         console.log(chalk.gray(`Output Path: ${config.outputPath}`));
@@ -110,7 +110,7 @@ globalThis.TICK_SIZE = config.tickSize;
             });
 
             if (currentBar) {
-                console.log(chalk.green('📋 Current 4H Bar:'), {
+                console.log(chalk.green(`📋 Current ${config.interval.toUpperCase()} Bar:`), {
                     start: new Date(currentBar.startTime).toLocaleString('en-US', { timeZone: 'UTC' }),
                     footprintLevels: currentBar.footprint.size,
                     totalBuyVol: currentBar.totalBuyVolume.toFixed(2),
@@ -126,7 +126,7 @@ globalThis.TICK_SIZE = config.tickSize;
                 sellTrades: recentTrades.filter(t => t.side === 'SELL').length
             });
 
-            console.log(chalk.yellow('📈 RSI Analysis:'), {
+            console.log(chalk.yellow(`📈 RSI Analysis (${config.interval.toUpperCase()}):`), {
                 rsi: rsiStats.rsi,
                 signal: rsiStats.signal,
                 trend: rsiStats.trend,
@@ -146,16 +146,16 @@ globalThis.TICK_SIZE = config.tickSize;
             });
 
 
-// Get live intrabar VWAP metrics
-const liveVP = this.volumeProfile.getLiveMetrics();
+            // Get live intrabar VWAP metrics
+            const liveVP = this.volumeProfile.getLiveMetrics();
 
-// Log in the status summary
-console.log(chalk.cyan('📊 Intrabar VWAP Preview:'), {
-  vwap: liveVP.vwap,
-  poc: liveVP.poc.price,
-  pocVolume: liveVP.poc.volume,
-  totalVol: liveVP.totalVolume
-});
+            // Log in the status summary
+            console.log(chalk.cyan('📊 Intrabar VWAP Preview:'), {
+                vwap: liveVP.vwap,
+                poc: liveVP.poc.price,
+                pocVolume: liveVP.poc.volume,
+                totalVol: liveVP.totalVolume
+            });
             console.log(chalk.gray('📖 Order Book:'), {
                 bidLevels: obStats.bidLevels,
                 askLevels: obStats.askLevels,
@@ -264,127 +264,127 @@ console.log(chalk.cyan('📊 Intrabar VWAP Preview:'), {
         this.connections.set('depth', ws);
     }
 
-handleKlineData(message) {
-    const kline = message.k;
+    handleKlineData(message) {
+        const kline = message.k;
 
-    // If the bar is closed, update RSI with that bar’s close  
-    if (kline.x) {
-        this.rsiCalculator.addClosePrice(kline.c, kline.T);
-    }
+        // If the bar is closed, update RSI with that bar’s close  
+        if (kline.x) {
+            this.rsiCalculator.addClosePrice(kline.c, kline.T);
+        }
 
-    // Log occasionally so the console isn’t spammed
-    if (Date.now() % 60000 < 5000) {
-        console.log(chalk.blue('📊 Kline Update:'), {
-            close: parseFloat(kline.c).toFixed(2),
-            volume: parseFloat(kline.v).toFixed(2),
-            rsi: this.rsiCalculator.getRSI()
-        });
-    }
+        // Log occasionally so the console isn’t spammed
+        if (Date.now() % 60000 < 5000) {
+            console.log(chalk.blue('📊 Kline Update:'), {
+                close: parseFloat(kline.c).toFixed(2),
+                volume: parseFloat(kline.v).toFixed(2),
+                rsi: this.rsiCalculator.getRSI()
+            });
+        }
 
-    // Feed kline into the bar aggregator
-    const finalizedBar = this.barAggregator.handleKlineUpdate(message);
+        // Feed kline into the bar aggregator
+        const finalizedBar = this.barAggregator.handleKlineUpdate(message);
 
-    // When a 4H bar closes…
-    if (finalizedBar) {
-        //
-        // === 1) Finalise CVD, divergences, whales, imbalances ===
-        //
-        const closedCvd = this.cvdAnalyzer.onBarClose({
-            close: finalizedBar.ohlc.close,
-            endTime: finalizedBar.endTime
-        });
+        // When a 4H bar closes…
+        if (finalizedBar) {
+            //
+            // === 1) Finalise CVD, divergences, whales, imbalances ===
+            //
+            const closedCvd = this.cvdAnalyzer.onBarClose({
+                close: finalizedBar.ohlc.close,
+                endTime: finalizedBar.endTime
+            });
 
-        const divergence = this.cvdAnalyzer.detectDivergence(finalizedBar.endTime);
-        const whales = this.whaleDetector.detectCluster(finalizedBar.endTime);
+            const divergence = this.cvdAnalyzer.detectDivergence(finalizedBar.endTime);
+            const whales = this.whaleDetector.detectCluster(finalizedBar.endTime);
 
-        const imbalances = {
-            buy: (finalizedBar.imbalances || []).filter(i => i.direction === 'BUY').length,
-            sell: (finalizedBar.imbalances || []).filter(i => i.direction === 'SELL').length
-        };
+            const imbalances = {
+                buy: (finalizedBar.imbalances || []).filter(i => i.direction === 'BUY').length,
+                sell: (finalizedBar.imbalances || []).filter(i => i.direction === 'SELL').length
+            };
 
-        //
-        // === 2) Finalise Volume Profile (VWAP, Value Area, Profile POC) ===
-        //
-        const vp = this.volumeProfile.finalizeBarAndGetMetrics();
-        // Example: vp = { vwap, poc:{price,volume}, valueAreaLow, valueAreaHigh, totalVolume }
+            //
+            // === 2) Finalise Volume Profile (VWAP, Value Area, Profile POC) ===
+            //
+            const vp = this.volumeProfile.finalizeBarAndGetMetrics();
+            // Example: vp = { vwap, poc:{price,volume}, valueAreaLow, valueAreaHigh, totalVolume }
 
-        //
-        // === 3) Reliability Scoring Inputs from DOM ===
-        //
-        const domTop = this.orderBookManager.getTopLevels(20);
-        const spread = ((domTop?.asks?.[0]?.price ?? 0) - (domTop?.bids?.[0]?.price ?? 0)) || 0;
-        const totalBidsVol = (domTop?.bids || []).reduce((s, l) => s + (l.quantity || 0), 0);
-        const totalAsksVol = (domTop?.asks || []).reduce((s, l) => s + (l.quantity || 0), 0);
-        const ratio = totalAsksVol > 0 ? totalBidsVol / totalAsksVol : Infinity;
+            //
+            // === 3) Reliability Scoring Inputs from DOM ===
+            //
+            const domTop = this.orderBookManager.getTopLevels(20);
+            const spread = ((domTop?.asks?.[0]?.price ?? 0) - (domTop?.bids?.[0]?.price ?? 0)) || 0;
+            const totalBidsVol = (domTop?.bids || []).reduce((s, l) => s + (l.quantity || 0), 0);
+            const totalAsksVol = (domTop?.asks || []).reduce((s, l) => s + (l.quantity || 0), 0);
+            const ratio = totalAsksVol > 0 ? totalBidsVol / totalAsksVol : Infinity;
 
-        const spoofingDetected = false; // wire your spoof detector here
-        const extremeImbalance = ratio > 10 || ratio < 0.1;
-        const wideSpread = spread > (config.tickSize * 5);
-        const lowLiquidity = (totalBidsVol + totalAsksVol) < 100; // tune this
+            const spoofingDetected = false; // wire your spoof detector here
+            const extremeImbalance = ratio > 10 || ratio < 0.1;
+            const wideSpread = spread > (config.tickSize * 5);
+            const lowLiquidity = (totalBidsVol + totalAsksVol) < 100; // tune this
 
-        const reliabilities = this.reliabilityScorer.compute({
-            spoofingDetected,
-            extremeImbalance,
-            wideSpread,
-            lowLiquidity
-        });
+            const reliabilities = this.reliabilityScorer.compute({
+                spoofingDetected,
+                extremeImbalance,
+                wideSpread,
+                lowLiquidity
+            });
 
-        //
-        // === 4) Build Checklist for audit trail ===
-        //
-        const checklistRes = this.checklist.build({
-            rsi: this.rsiCalculator.getRSI(),
-            price: finalizedBar.ohlc.close,
-            vwap: vp.vwap,
-            valueAreaLow: vp.valueAreaLow,
-            valueAreaHigh: vp.valueAreaHigh,
-            poc: vp.poc, // profile POC — or finalizedBar.poc if you prefer footprint POC
-            cvd: closedCvd,
-            imbalances,
-            whales
-        });
-
-        //
-        // === 5) Signal Engine using Reliability + VWAP/VA feature ===
-        //
-        const signal = this.signalEngine.analyzeWithReliability(
-            {
+            //
+            // === 4) Build Checklist for audit trail ===
+            //
+            const checklistRes = this.checklist.build({
                 rsi: this.rsiCalculator.getRSI(),
-                cvd: closedCvd,
-                divergence,
-                whales: this.whaleDetector.getLast(),
-                imbalances,
                 price: finalizedBar.ohlc.close,
                 vwap: vp.vwap,
                 valueAreaLow: vp.valueAreaLow,
                 valueAreaHigh: vp.valueAreaHigh,
-                poc: finalizedBar.poc // or vp.poc
-            },
-            reliabilities
-        );
+                poc: vp.poc, // profile POC — or finalizedBar.poc if you prefer footprint POC
+                cvd: closedCvd,
+                imbalances,
+                whales
+            });
 
-        //
-        // === 6) Persist snapshot with EVERYTHING ===
-        //
-        this.processBarClose(finalizedBar, {
-            closedCvd,
-            divergence,
-            whales,
-            imbalances,
-            signal,
-            dom: domTop,
-            vwapPack: vp,
-            checklist: checklistRes
-        });
+            //
+            // === 5) Signal Engine using Reliability + VWAP/VA feature ===
+            //
+            const signal = this.signalEngine.analyzeWithReliability(
+                {
+                    rsi: this.rsiCalculator.getRSI(),
+                    cvd: closedCvd,
+                    divergence,
+                    whales: this.whaleDetector.getLast(),
+                    imbalances,
+                    price: finalizedBar.ohlc.close,
+                    vwap: vp.vwap,
+                    valueAreaLow: vp.valueAreaLow,
+                    valueAreaHigh: vp.valueAreaHigh,
+                    poc: finalizedBar.poc // or vp.poc
+                },
+                reliabilities
+            );
+
+            //
+            // === 6) Persist snapshot with EVERYTHING ===
+            //
+            this.processBarClose(finalizedBar, {
+                closedCvd,
+                divergence,
+                whales,
+                imbalances,
+                signal,
+                dom: domTop,
+                vwapPack: vp,
+                checklist: checklistRes
+            });
+        }
     }
-}
 
 
     handleTradeData(message) {
         const classifiedTrade = this.tradeClassifier.classifyTrade(message);
         this.barAggregator.addTradeToBar(classifiedTrade);
-// Feed Volume Profile for VWAP/Value Area
-this.volumeProfile.addTrade(classifiedTrade.price, classifiedTrade.quantity);
+        // Feed Volume Profile for VWAP/Value Area
+        this.volumeProfile.addTrade(classifiedTrade.price, classifiedTrade.quantity);
 
 
         // Feed CVD and Whale
@@ -426,87 +426,87 @@ this.volumeProfile.addTrade(classifiedTrade.price, classifiedTrade.quantity);
         // Minimal logging for depth updates
     }
 
-processBarClose(finalizedBar, analytics) {
-  const { closedCvd, divergence, whales, imbalances, signal, dom, vwapPack, checklist } = analytics;
+    processBarClose(finalizedBar, analytics) {
+        const { closedCvd, divergence, whales, imbalances, signal, dom, vwapPack, checklist } = analytics;
 
-  const snapshot = {
-    timestamp: Date.now(),
-    barStart: finalizedBar.startTime,
-    barEnd: finalizedBar.endTime,
-    symbol: config.symbol,
+        const snapshot = {
+            timestamp: Date.now(),
+            barStart: finalizedBar.startTime,
+            barEnd: finalizedBar.endTime,
+            symbol: config.symbol,
 
-    // Footprint (price ladder)
-    priceladder: finalizedBar.footprintArray,
+            // Footprint (price ladder)
+            priceladder: finalizedBar.footprintArray,
 
-    // Bar totals
-    barTotals: {
-      totalBuy: finalizedBar.totalBuyVolume,
-      totalSell: finalizedBar.totalSellVolume,
-      totalVolume: finalizedBar.totalBuyVolume + finalizedBar.totalSellVolume,
-      netDelta: finalizedBar.totalDelta
-    },
+            // Bar totals
+            barTotals: {
+                totalBuy: finalizedBar.totalBuyVolume,
+                totalSell: finalizedBar.totalSellVolume,
+                totalVolume: finalizedBar.totalBuyVolume + finalizedBar.totalSellVolume,
+                netDelta: finalizedBar.totalDelta
+            },
 
-    // OHLC and footprint POC (from aggregator)
-    ohlc: finalizedBar.ohlc,
-    poc: finalizedBar.poc,
+            // OHLC and footprint POC (from aggregator)
+            ohlc: finalizedBar.ohlc,
+            poc: finalizedBar.poc,
 
-    // DOM snapshot (top-20 at close)
-    dom: dom,
+            // DOM snapshot (top-20 at close)
+            dom: dom,
 
-    // RSI(14) based on 4H closes
-    rsi: this.rsiCalculator.getRSI(),
+            // RSI(14) based on 4H closes
+            rsi: this.rsiCalculator.getRSI(),
 
-    // Cumulative Volume Delta and divergence info
-    cvd: {
-      barCvd: closedCvd,
-      divergence: divergence // { type: 'BULLISH_DIVERGENCE'|'BEARISH_DIVERGENCE', strength } or null
-    },
+            // Cumulative Volume Delta and divergence info
+            cvd: {
+                barCvd: closedCvd,
+                divergence: divergence // { type: 'BULLISH_DIVERGENCE'|'BEARISH_DIVERGENCE', strength } or null
+            },
 
-    // Whale detection summary (last window)
-    whales: whales, // { detected, count, buyVolume, sellVolume, netFlow, threshold, ... }
+            // Whale detection summary (last window)
+            whales: whales, // { detected, count, buyVolume, sellVolume, netFlow, threshold, ... }
 
-    // Imbalance summary for the bar (counts)
-    imbalanceSummary: imbalances, // { buy, sell }
+            // Imbalance summary for the bar (counts)
+            imbalanceSummary: imbalances, // { buy, sell }
 
-    // Volume Profile metrics at close (execution-based)
-    volumeProfile: {
-      vwap: vwapPack.vwap,
-      valueAreaLow: vwapPack.valueAreaLow,
-      valueAreaHigh: vwapPack.valueAreaHigh,
-      poc: vwapPack.poc, // { price, volume } profile POC
-      totalVolume: vwapPack.totalVolume
-    },
+            // Volume Profile metrics at close (execution-based)
+            volumeProfile: {
+                vwap: vwapPack.vwap,
+                valueAreaLow: vwapPack.valueAreaLow,
+                valueAreaHigh: vwapPack.valueAreaHigh,
+                poc: vwapPack.poc, // { price, volume } profile POC
+                totalVolume: vwapPack.totalVolume
+            },
 
-    // Checklist booleans + confluence counts
-    checklist: {
-      ...checklist.checklist,
-      longConfluence: checklist.longConfluence,
-      shortConfluence: checklist.shortConfluence
-    },
+            // Checklist booleans + confluence counts
+            checklist: {
+                ...checklist.checklist,
+                longConfluence: checklist.longConfluence,
+                shortConfluence: checklist.shortConfluence
+            },
 
-    // Reliability-adjusted decision (LONG/SHORT/NEUTRAL)
-    signal: signal // { signal, strength, confidence, components, appliedReliabilities }
-  };
+            // Reliability-adjusted decision (LONG/SHORT/NEUTRAL)
+            signal: signal // { signal, strength, confidence, components, appliedReliabilities }
+        };
 
-  const fileName = `footprint_complete_${Date.now()}.json`;
-  const filePath = path.join(config.outputPath, fileName);
+        const fileName = `footprint_complete_${Date.now()}.json`;
+        const filePath = path.join(config.outputPath, fileName);
 
-  try {
-    fs.writeFileSync(filePath, JSON.stringify(snapshot, null, 2));
-    console.log(chalk.green(`✅ COMPLETE footprint snapshot saved: ${filePath}`));
-    console.log(chalk.green('📊 Summary:'), {
-      rsi: snapshot.rsi,
-      vwap: snapshot.volumeProfile.vwap,
-      valueArea: `${snapshot.volumeProfile.valueAreaLow} - ${snapshot.volumeProfile.valueAreaHigh}`,
-      signal: snapshot.signal.signal,
-      confidence: snapshot.signal.confidence,
-      longConfluence: snapshot.checklist.longConfluence,
-      shortConfluence: snapshot.checklist.shortConfluence
-    });
-  } catch (err) {
-    console.error(chalk.red('❌ Failed to save snapshot:'), err);
-  }
-}
+        try {
+            fs.writeFileSync(filePath, JSON.stringify(snapshot, null, 2));
+            console.log(chalk.green(`✅ COMPLETE ${config.interval.toUpperCase()} footprint snapshot saved: ${filePath}`));
+            console.log(chalk.green('📊 Summary:'), {
+                rsi: snapshot.rsi,
+                vwap: snapshot.volumeProfile.vwap,
+                valueArea: `${snapshot.volumeProfile.valueAreaLow} - ${snapshot.volumeProfile.valueAreaHigh}`,
+                signal: snapshot.signal.signal,
+                confidence: snapshot.signal.confidence,
+                longConfluence: snapshot.checklist.longConfluence,
+                shortConfluence: snapshot.checklist.shortConfluence
+            });
+        } catch (err) {
+            console.error(chalk.red('❌ Failed to save snapshot:'), err);
+        }
+    }
 
 
 
