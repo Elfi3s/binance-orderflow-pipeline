@@ -18,6 +18,8 @@ import { SignalEngine } from './modules/signal-engine.js';
 import { VolumeProfile } from './modules/volume-profile.js';
 import { ReliabilityScorer } from './modules/reliability-scorer.js';
 import { Checklist } from './modules/checklist.js';
+// At the top with other imports:
+import { DeltaPatternAnalyzer } from './modules/delta-pattern-analyzer.js';
 
 class BinanceOrderFlowPipeline {
     constructor() {
@@ -41,6 +43,8 @@ class BinanceOrderFlowPipeline {
         this.reliabilityScorer = new ReliabilityScorer();
         this.checklist = new Checklist();
         globalThis.TICK_SIZE = config.tickSize;
+        // In constructor:
+        this.deltaPatternAnalyzer = new DeltaPatternAnalyzer();
 
         // Ensure output directories exist (Windows)
         this.ensureDirectories();
@@ -289,6 +293,9 @@ class BinanceOrderFlowPipeline {
             //
             // === 1) Finalise CVD, divergences, whales, imbalances ===
             //
+
+            // ADD THIS: Delta pattern analysis
+            const deltaPatterns = this.deltaPatternAnalyzer.onBarClose(finalizedBar);
             const closedCvd = this.cvdAnalyzer.onBarClose({
                 close: finalizedBar.ohlc.close,
                 endTime: finalizedBar.endTime
@@ -341,7 +348,9 @@ class BinanceOrderFlowPipeline {
                 poc: vp.poc, // profile POC — or finalizedBar.poc if you prefer footprint POC
                 cvd: closedCvd,
                 imbalances,
-                whales
+                whales,
+                deltaPatterns  // ← ADD THIS
+
             });
 
             //
@@ -427,14 +436,14 @@ class BinanceOrderFlowPipeline {
     }
 
     processBarClose(finalizedBar, analytics) {
-        const { closedCvd, divergence, whales, imbalances, signal, dom, vwapPack, checklist } = analytics;
+        const { closedCvd, divergence, whales, imbalances, signal, dom, vwapPack, checklist, deltaPatterns } = analytics;
 
         const snapshot = {
             timestamp: Date.now(),
             barStart: finalizedBar.startTime,
             barEnd: finalizedBar.endTime,
             symbol: config.symbol,
-
+            deltaPatterns: deltaPatterns,
             // Footprint (price ladder)
             priceladder: finalizedBar.footprintArray,
 
@@ -494,35 +503,37 @@ class BinanceOrderFlowPipeline {
         try {
             fs.writeFileSync(filePath, JSON.stringify(snapshot, null, 2));
             console.log(chalk.green(`✅ COMPLETE ${config.interval.toUpperCase()} footprint snapshot saved: ${filePath}`));
-            console.log(chalk.green('📊 Summary:'), {
+            console.log(chalk.green('📊 Enhanced Summary:'), {
                 rsi: snapshot.rsi,
-                vwap: snapshot.volumeProfile.vwap,
-                valueArea: `${snapshot.volumeProfile.valueAreaLow} - ${snapshot.volumeProfile.valueAreaHigh}`,
                 signal: snapshot.signal.signal,
                 confidence: snapshot.signal.confidence,
                 longConfluence: snapshot.checklist.longConfluence,
-                shortConfluence: snapshot.checklist.shortConfluence
+                shortConfluence: snapshot.checklist.shortConfluence,
+                deltaPatterns: deltaPatterns.summary.dominantSignal,
+                strongDeltaSignals: deltaPatterns.summary.strongSignals,
+                detectedPatterns: deltaPatterns.patterns.map(p => p.type)
             });
-        } catch (err) {
-            console.error(chalk.red('❌ Failed to save snapshot:'), err);
+        }
+        } catch(err) {
+        console.error(chalk.red('❌ Failed to save snapshot:'), err);
+    }
+}
+
+
+
+close() {
+    console.log(chalk.yellow('🔌 Closing all WebSocket connections...'));
+
+    for (const [name, ws] of this.connections) {
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.close();
+            console.log(chalk.gray(`❌ ${name} connection closed`));
         }
     }
 
-
-
-    close() {
-        console.log(chalk.yellow('🔌 Closing all WebSocket connections...'));
-
-        for (const [name, ws] of this.connections) {
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.close();
-                console.log(chalk.gray(`❌ ${name} connection closed`));
-            }
-        }
-
-        this.connections.clear();
-        console.log(chalk.blue('👋 Complete pipeline shutdown'));
-    }
+    this.connections.clear();
+    console.log(chalk.blue('👋 Complete pipeline shutdown'));
+}
 }
 
 // Initialize and start the pipeline
