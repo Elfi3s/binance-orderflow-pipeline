@@ -18,8 +18,9 @@ import { SignalEngine } from './modules/signal-engine.js';
 import { VolumeProfile } from './modules/volume-profile.js';
 import { ReliabilityScorer } from './modules/reliability-scorer.js';
 import { Checklist } from './modules/checklist.js';
-// At the top with other imports:
-import { DeltaPatternAnalyzer } from './modules/delta-pattern-analyzer.js';
+// WITH:
+import { EnhancedDeltaAnalyzer } from './modules/enhanced-delta-analyzer.js';
+import { VisualChecklist } from './modules/visual-checklist.js';
 
 class BinanceOrderFlowPipeline {
     constructor() {
@@ -43,8 +44,9 @@ class BinanceOrderFlowPipeline {
         this.reliabilityScorer = new ReliabilityScorer();
         this.checklist = new Checklist();
         globalThis.TICK_SIZE = config.tickSize;
-        // In constructor:
-        this.deltaPatternAnalyzer = new DeltaPatternAnalyzer();
+// WITH:
+this.enhancedDeltaAnalyzer = new EnhancedDeltaAnalyzer();
+this.visualChecklist = new VisualChecklist();
 
         // Ensure output directories exist (Windows)
         this.ensureDirectories();
@@ -435,89 +437,90 @@ class BinanceOrderFlowPipeline {
         // Minimal logging for depth updates
     }
 
-    processBarClose(finalizedBar, analytics) {
-        const { closedCvd, divergence, whales, imbalances, signal, dom, vwapPack, checklist, deltaPatterns } = analytics;
+processBarClose(finalizedBar, analytics) {
+  const { closedCvd, divergence, whales, imbalances, signal, dom, vwapPack, checklist, deltaPatterns } = analytics;
 
-        const snapshot = {
-            timestamp: Date.now(),
-            barStart: finalizedBar.startTime,
-            barEnd: finalizedBar.endTime,
-            symbol: config.symbol,
-            deltaPatterns: deltaPatterns,
-            // Footprint (price ladder)
-            priceladder: finalizedBar.footprintArray,
+  // === VISUAL CHECKLIST (NEW - BEFORE SNAPSHOT) ===
+  const checklistSummary = this.visualChecklist.displayOrderFlowChecklist({
+    rsi: this.rsiCalculator.getRSI(),
+    price: finalizedBar.ohlc.close,
+    vwap: vwapPack.vwap,
+    valueAreaLow: vwapPack.valueAreaLow,
+    valueAreaHigh: vwapPack.valueAreaHigh,
+    cvd: closedCvd,
+    divergence,
+    whales,
+    imbalances,
+    deltaPatterns,
+    finalizedBar,
+    interval: config.interval
+  });
 
-            // Bar totals
-            barTotals: {
-                totalBuy: finalizedBar.totalBuyVolume,
-                totalSell: finalizedBar.totalSellVolume,
-                totalVolume: finalizedBar.totalBuyVolume + finalizedBar.totalSellVolume,
-                netDelta: finalizedBar.totalDelta
-            },
+  const snapshot = {
+    timestamp: Date.now(),
+    barStart: finalizedBar.startTime,
+    barEnd: finalizedBar.endTime,
+    symbol: config.symbol,
+    
+    // Enhanced analytics
+    deltaPatterns: deltaPatterns,
+    visualChecklistSummary: checklistSummary, // NEW
+    
+    // ... rest of existing fields ...
+    priceladder: finalizedBar.footprintArray,
+    barTotals: {
+      totalBuy: finalizedBar.totalBuyVolume,
+      totalSell: finalizedBar.totalSellVolume,
+      totalVolume: finalizedBar.totalBuyVolume + finalizedBar.totalSellVolume,
+      netDelta: finalizedBar.totalDelta
+    },
+    ohlc: finalizedBar.ohlc,
+    poc: finalizedBar.poc,
+    dom: dom,
+    rsi: this.rsiCalculator.getRSI(),
+    cvd: {
+      barCvd: closedCvd,
+      divergence: divergence
+    },
+    whales: whales,
+    imbalanceSummary: imbalances,
+    volumeProfile: {
+      vwap: vwapPack.vwap,
+      valueAreaLow: vwapPack.valueAreaLow,
+      valueAreaHigh: vwapPack.valueAreaHigh,
+      poc: vwapPack.poc,
+      totalVolume: vwapPack.totalVolume
+    },
+    checklist: {
+      ...checklist.checklist,
+      longConfluence: checklist.longConfluence,
+      shortConfluence: checklist.shortConfluence
+    },
+    signal: signal
+  };
 
-            // OHLC and footprint POC (from aggregator)
-            ohlc: finalizedBar.ohlc,
-            poc: finalizedBar.poc,
+  const fileName = `footprint_complete_${Date.now()}.json`;
+  const filePath = path.join(config.outputPath, fileName);
 
-            // DOM snapshot (top-20 at close)
-            dom: dom,
-
-            // RSI(14) based on 4H closes
-            rsi: this.rsiCalculator.getRSI(),
-
-            // Cumulative Volume Delta and divergence info
-            cvd: {
-                barCvd: closedCvd,
-                divergence: divergence // { type: 'BULLISH_DIVERGENCE'|'BEARISH_DIVERGENCE', strength } or null
-            },
-
-            // Whale detection summary (last window)
-            whales: whales, // { detected, count, buyVolume, sellVolume, netFlow, threshold, ... }
-
-            // Imbalance summary for the bar (counts)
-            imbalanceSummary: imbalances, // { buy, sell }
-
-            // Volume Profile metrics at close (execution-based)
-            volumeProfile: {
-                vwap: vwapPack.vwap,
-                valueAreaLow: vwapPack.valueAreaLow,
-                valueAreaHigh: vwapPack.valueAreaHigh,
-                poc: vwapPack.poc, // { price, volume } profile POC
-                totalVolume: vwapPack.totalVolume
-            },
-
-            // Checklist booleans + confluence counts
-            checklist: {
-                ...checklist.checklist,
-                longConfluence: checklist.longConfluence,
-                shortConfluence: checklist.shortConfluence
-            },
-
-            // Reliability-adjusted decision (LONG/SHORT/NEUTRAL)
-            signal: signal // { signal, strength, confidence, components, appliedReliabilities }
-        };
-
-        const fileName = `footprint_complete_${Date.now()}.json`;
-        const filePath = path.join(config.outputPath, fileName);
-
-        try {
-            fs.writeFileSync(filePath, JSON.stringify(snapshot, null, 2));
-            console.log(chalk.green(`✅ COMPLETE ${config.interval.toUpperCase()} footprint snapshot saved: ${filePath}`));
-            console.log(chalk.green('📊 Enhanced Summary:'), {
-                rsi: snapshot.rsi,
-                signal: snapshot.signal.signal,
-                confidence: snapshot.signal.confidence,
-                longConfluence: snapshot.checklist.longConfluence,
-                shortConfluence: snapshot.checklist.shortConfluence,
-                deltaPatterns: deltaPatterns.summary.dominantSignal,
-                strongDeltaSignals: deltaPatterns.summary.strongSignals,
-                detectedPatterns: deltaPatterns.patterns.map(p => p.type)
-            });
-        }
-        } catch(err) {
-        console.error(chalk.red('❌ Failed to save snapshot:'), err);
-    }
+  try {
+    fs.writeFileSync(filePath, JSON.stringify(snapshot, null, 2));
+    console.log(chalk.green(`✅ COMPLETE ${config.interval.toUpperCase()} footprint snapshot saved: ${filePath}`));
+    
+    // SIMPLE SUMMARY AFTER VISUAL CHECKLIST
+    console.log(chalk.blue('📋 QUICK SUMMARY:'), {
+      interval: config.interval.toUpperCase(),
+      assessment: checklistSummary.overallSignal,
+      confidence: `${checklistSummary.confidence}%`,
+      rsi: this.rsiCalculator.getRSI(),
+      delta: finalizedBar.totalDelta.toFixed(0),
+      patterns: deltaPatterns.summary.totalPatterns
+    });
+    
+  } catch (err) {
+    console.error(chalk.red('❌ Failed to save snapshot:'), err);
+  }
 }
+
 
 
 

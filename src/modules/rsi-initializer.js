@@ -9,7 +9,7 @@ export class RSIInitializer {
   }
 
   async initializeRSIWithHistory(rsiCalculator, periodsNeeded = 20) {
-    console.log(chalk.yellow(`📈 Initializing RSI with ${periodsNeeded} historical 4H bars...`));
+    console.log(chalk.yellow(`📈 Initializing RSI with ${periodsNeeded} historical ${config.interval.toUpperCase()} bars...`));
     
     try {
       // Fetch historical 4H klines
@@ -68,7 +68,7 @@ export class RSIInitializer {
       // Filter out the current incomplete kline (last one)
       const completedKlines = klines.slice(0, -1);
       
-      console.log(chalk.green(`📊 Fetched ${completedKlines.length} completed 4H klines`));
+      console.log(chalk.green(`📊 Fetched ${completedKlines.length} completed ${config.interval.toUpperCase()} klines`));
       
       // Log sample data for verification
       if (completedKlines.length > 0) {
