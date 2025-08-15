@@ -21,7 +21,11 @@ import { Checklist } from './modules/checklist.js';
 // WITH:
 import { EnhancedDeltaAnalyzer } from './modules/enhanced-delta-analyzer.js';
 import { VisualChecklist } from './modules/visual-checklist.js';
-
+import { AbsorptionDetector } from './modules/absorption-detector.js';
+import { IcebergDetector } from './modules/iceberg-detector.js';
+import { VolumeAnomalyDetector } from './modules/volume-anomaly-detector.js';
+import { ExhaustionDetector } from './modules/exhaustion-detector.js';
+import { EnhancedDOMAnalyzer } from './modules/enhanced-dom-analyzer.js';
 class BinanceOrderFlowPipeline {
     constructor() {
 
@@ -47,7 +51,11 @@ class BinanceOrderFlowPipeline {
 // WITH:
 this.enhancedDeltaAnalyzer = new EnhancedDeltaAnalyzer();
 this.visualChecklist = new VisualChecklist();
-
+this.absorptionDetector = new AbsorptionDetector();
+this.icebergDetector = new IcebergDetector();
+this.volumeAnomalyDetector = new VolumeAnomalyDetector();
+this.exhaustionDetector = new ExhaustionDetector();
+this.enhancedDOMAnalyzer = new EnhancedDOMAnalyzer();
         // Ensure output directories exist (Windows)
         this.ensureDirectories();
 
@@ -297,7 +305,7 @@ this.visualChecklist = new VisualChecklist();
             //
 
             // ADD THIS: Delta pattern analysis
-            const deltaPatterns = this.deltaPatternAnalyzer.onBarClose(finalizedBar);
+            const deltaPatterns = this.enhancedDeltaAnalyzer.onBarClose(finalizedBar);
             const closedCvd = this.cvdAnalyzer.onBarClose({
                 close: finalizedBar.ohlc.close,
                 endTime: finalizedBar.endTime
@@ -411,7 +419,19 @@ this.visualChecklist = new VisualChecklist();
             time: classifiedTrade.time,
             price: classifiedTrade.price
         });
+// NEW: Feed new analyzers
+  this.absorptionDetector.onTrade(classifiedTrade);
+  const icebergDetection = this.icebergDetector.onTrade(classifiedTrade);
+  const volumeAnomaly = this.volumeAnomalyDetector.onTrade(classifiedTrade);
 
+  // Log significant detections
+  if (icebergDetection) {
+    console.log(chalk.cyan('🧊 Iceberg Order Detected:'), icebergDetection);
+  }
+  
+  if (volumeAnomaly) {
+    console.log(chalk.yellow('📊 Volume Anomaly:'), volumeAnomaly);
+  }
         // Occasionally detect clusters (whales)
         if (classifiedTrade.tradeId % 300 === 0) {
             this.whaleDetector.detectCluster();
@@ -432,14 +452,24 @@ this.visualChecklist = new VisualChecklist();
         }
     }
 
-    handleDepthData(message) {
-        const success = this.orderBookManager.handleDepthUpdate(message);
-        // Minimal logging for depth updates
-    }
+handleDepthData(message) {
+  const success = this.orderBookManager.handleDepthUpdate(message);
+  
+  // NEW: Enhanced DOM analysis
+  const domPatterns = this.enhancedDOMAnalyzer.onDepthUpdate(message, this.orderBookManager);
+  if (domPatterns) {
+    console.log(chalk.magenta('📚 DOM Patterns:'), domPatterns);
+  }
+}
+
 
 processBarClose(finalizedBar, analytics) {
   const { closedCvd, divergence, whales, imbalances, signal, dom, vwapPack, checklist, deltaPatterns } = analytics;
-
+const absorptionPattern = this.absorptionDetector.detectAbsorption();
+const exhaustionPattern = this.exhaustionDetector.onBarClose(finalizedBar);
+const activeIcebergs = this.icebergDetector.getActiveIcebergs();
+const volumeImpact = this.volumeAnomalyDetector.getCumulativeBlockImpact();
+const domStats = this.enhancedDOMAnalyzer.getDOMStats();
   // === VISUAL CHECKLIST (NEW - BEFORE SNAPSHOT) ===
   const checklistSummary = this.visualChecklist.displayOrderFlowChecklist({
     rsi: this.rsiCalculator.getRSI(),
@@ -496,7 +526,12 @@ processBarClose(finalizedBar, analytics) {
       longConfluence: checklist.longConfluence,
       shortConfluence: checklist.shortConfluence
     },
-    signal: signal
+    signal: signal,
+    absorptionPattern: absorptionPattern,
+exhaustionPattern: exhaustionPattern,
+activeIcebergs: activeIcebergs,
+volumeImpact: volumeImpact,
+domStats: domStats
   };
 
   const fileName = `footprint_complete_${Date.now()}.json`;

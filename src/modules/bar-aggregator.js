@@ -1,4 +1,4 @@
-// src\modules\bar-aggregator.js
+// src/modules/bar-aggregator.js - COMPLETE REPLACEMENT
 import chalk from 'chalk';
 import { config } from '../../config.js';
 
@@ -6,7 +6,28 @@ export class BarAggregator {
   constructor() {
     this.currentBar = null;
     this.completedBars = [];
-    this.interval = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
+    
+    // FIX: Use config interval dynamically instead of hardcoded 4H
+    this.interval = this.parseIntervalToMs(config.interval);
+    this.intervalDisplay = config.interval.toUpperCase();
+  }
+
+  // NEW: Parse interval string to milliseconds
+  parseIntervalToMs(interval) {
+    const matches = interval.match(/^(\d+)([smhd])$/);
+    if (!matches) throw new Error(`Invalid interval format: ${interval}`);
+    
+    const value = parseInt(matches[1]);
+    const unit = matches[2];
+    
+    const multipliers = {
+      's': 1000,
+      'm': 60 * 1000,
+      'h': 60 * 60 * 1000,
+      'd': 24 * 60 * 60 * 1000
+    };
+    
+    return value * multipliers[unit];
   }
 
   // Check if we need a new bar based on kline data
@@ -33,7 +54,7 @@ export class BarAggregator {
     this.currentBar.lastUpdate = Date.now();
 
     if (isClosed) {
-      console.log(chalk.magenta('🔥 4H Bar Closed - Finalizing bar data...'));
+      console.log(chalk.magenta(`🔥 ${this.intervalDisplay} Bar Closed - Finalizing bar data...`));
       return this.finalizeCurrentBar();
     }
 
@@ -44,8 +65,9 @@ export class BarAggregator {
     // Archive previous bar if exists
     if (this.currentBar) {
       this.completedBars.push(this.currentBar);
-      // Keep only last 24 bars (4 days of 4h bars)
-      if (this.completedBars.length > 24) {
+      // Keep appropriate number of bars based on interval
+      const maxBars = this.getMaxBarsToKeep();
+      if (this.completedBars.length > maxBars) {
         this.completedBars.shift();
       }
     }
@@ -70,12 +92,20 @@ export class BarAggregator {
       lastUpdate: Date.now()
     };
 
-    console.log(chalk.blue('📊 Started new 4H bar:'), {
+    console.log(chalk.blue(`📊 Started new ${this.intervalDisplay} bar:`), {
       start: new Date(startTime).toISOString(),
       end: new Date(endTime).toISOString()
     });
 
     return this.currentBar;
+  }
+
+  // NEW: Calculate max bars to keep based on interval
+  getMaxBarsToKeep() {
+    const intervalMs = this.interval;
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    const barsPerDay = oneDayMs / intervalMs;
+    return Math.ceil(barsPerDay * 4); // Keep 4 days worth of bars
   }
 
   // Add trade data to current bar for footprint calculation
@@ -142,7 +172,7 @@ export class BarAggregator {
       .sort((a, b) => b.price - a.price); // Sort by price descending
 
     console.log(chalk.green('✅ Bar finalized:'), {
-      duration: '4h',
+      duration: this.intervalDisplay,
       footprintLevels: finalizedBar.footprintArray.length,
       totalBuyVolume: finalizedBar.totalBuyVolume.toFixed(2),
       totalSellVolume: finalizedBar.totalSellVolume.toFixed(2),
