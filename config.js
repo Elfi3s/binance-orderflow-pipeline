@@ -5,6 +5,10 @@ export const config = {
   symbol: 'ETHUSDT',
   interval: '15m',
   
+    // ADD TIMEZONE CONFIG
+  displayTimezone: 'Asia/Singapore', // SGT timezone
+  displayTimeFormat: 'DD/MM/YYYY, HH:mm:ss', // Format preference
+  
   // Binance WebSocket URLs
   wsUrls: {
     futures: 'wss://fstream.binance.com',
