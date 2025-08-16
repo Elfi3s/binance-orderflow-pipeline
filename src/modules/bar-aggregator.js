@@ -1,7 +1,7 @@
 // src/modules/bar-aggregator.js - COMPLETE REPLACEMENT
 import chalk from 'chalk';
 import { config } from '../../config.js';
-
+import { TimezoneFormatter } from '../utils/timezone-formatter.js';
 export class BarAggregator {
   constructor() {
     this.currentBar = null;
@@ -171,6 +171,11 @@ export class BarAggregator {
       }))
       .sort((a, b) => b.price - a.price); // Sort by price descending
 
+
+        // ADD START AND END TIME TO BAR CLOSE MESSAGE
+  console.log(chalk.magenta(`🔥 ${this.intervalDisplay} Bar Closed - ${TimezoneFormatter.getCurrentTime()}`));
+  console.log(chalk.cyan(`📅 Bar Period: ${TimezoneFormatter.formatTime(finalizedBar.startTime)} to ${TimezoneFormatter.formatTime(finalizedBar.endTime)}`));
+  
     console.log(chalk.green('✅ Bar finalized:'), {
       duration: this.intervalDisplay,
       footprintLevels: finalizedBar.footprintArray.length,

@@ -77,4 +77,19 @@ export class TradeClassifier {
       console.log(chalk.gray(`🗑️ Cleaned ${removed} old trades, ${this.classifiedTrades.length} remaining`));
     }
   }
+
+  addToRecentTrades(trade) {
+  if (!this.recentTrades) {
+    this.recentTrades = [];
+  }
+  
+  this.recentTrades.push({
+    ...trade,
+    timestamp: trade.time || Date.now()
+  });
+  
+  // Keep only recent trades (last 5 minutes)
+  const cutoff = Date.now() - (5 * 60 * 1000);
+  this.recentTrades = this.recentTrades.filter(t => (t.timestamp || t.time) > cutoff);
+}
 }

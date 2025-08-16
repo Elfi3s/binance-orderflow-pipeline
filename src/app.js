@@ -34,7 +34,8 @@ import { DOMPressureAnalyzer } from './modules/dom-pressure-analyzer.js';
 import { VolumeFlowAnalyzer } from './modules/volume-flow-analyzer.js';
 import { TimeframeStorageManager } from './modules/timeframe-storage-manager.js';
 import { LiveDataReader } from './modules/live-data-reader.js';
-
+import { TimezoneFormatter } from './utils/timezone-formatter.js';
+import { BinanceVerification } from './modules/binance-verification.js';
 class BinanceOrderFlowPipeline {
     constructor() {
 
@@ -149,7 +150,8 @@ startStatusUpdates() {
     const rsiStats = this.rsiCalculator.getStats();
 
     console.log(chalk.magenta('════════════════════════════════════════'));
-    console.log(chalk.blue('📊 COMPLETE PIPELINE STATUS'));
+       // ADD TIMESTAMP HERE
+    console.log(chalk.blue(`📊 COMPLETE PIPELINE STATUS - ${TimezoneFormatter.getCurrentTime()}`));
     const cvdStats = this.cvdAnalyzer.getSnapshotStats();
     const whaleLast = this.whaleDetector.getLast();
     console.log(chalk.green('📈 Flow Stats:'), {
@@ -161,7 +163,7 @@ startStatusUpdates() {
 
     if (currentBar) {
       console.log(chalk.green(`📋 Current ${config.interval.toUpperCase()} Bar:`), {
-        start: new Date(currentBar.startTime).toLocaleString('en-US', { timeZone: 'UTC' }),
+        start: TimezoneFormatter.formatTime(currentBar.startTime),
         footprintLevels: currentBar.footprint.size,
         totalBuyVol: currentBar.totalBuyVolume.toFixed(2),
         totalSellVol: currentBar.totalSellVolume.toFixed(2),
@@ -443,13 +445,26 @@ startStatusUpdates() {
     }
 
 
-    handleTradeData(message) {
-        let classifiedTrade;
-        if (message.data) {
-            classifiedTrade = message.data; // From data reader
-        } else {
-            classifiedTrade = this.tradeClassifier.classifyTrade(message); // Direct WebSocket format
-        }
+handleTradeData(message) {
+  let classifiedTrade;
+  
+  // Handle both direct data and wrapped message formats
+  if (message.data) {
+    classifiedTrade = message.data; // From data reader
+  } else {
+    classifiedTrade = this.tradeClassifier.classifyTrade(message); // Direct WebSocket format
+  }
+
+  // FIX: Ensure trade has proper timestamp and gets added to recent trades
+  if (!classifiedTrade.time) {
+    classifiedTrade.time = Date.now();
+  }
+  
+  // FIX: Manually add to trade classifier's recent trades when reading from file
+  if (message.data) {
+    // This is from file, manually add to recent trades
+    this.tradeClassifier.addToRecentTrades(classifiedTrade);
+  }
         this.barAggregator.addTradeToBar(classifiedTrade);
         // Feed Volume Profile for VWAP/Value Area
         this.volumeProfile.addTrade(classifiedTrade.price, classifiedTrade.quantity);
@@ -478,9 +493,9 @@ startStatusUpdates() {
             console.log(chalk.blue('🧊 Iceberg Order:'), `${icebergDetection.signal} at ${icebergDetection.price} - ${icebergDetection.totalVolume.toFixed(0)} ETH`);
         }
 
-        if (volumeAnomaly && volumeAnomaly.type === 'BLOCK_TRADE_CLUSTER') {
-            console.log(chalk.magenta('📊 Block Trade Cluster:'), `${volumeAnomaly.signal} - ${volumeAnomaly.tradeVolume.toFixed(0)} ETH`);
-        }
+if (volumeAnomaly && volumeAnomaly.type === 'BLOCK_TRADE_CLUSTER') {
+    console.log(chalk.magenta(`📊 Block Trade Cluster: ${volumeAnomaly.signal} - ${volumeAnomaly.tradeVolume.toFixed(0)} ETH - ${TimezoneFormatter.getCurrentTime()}`));
+  }
 
         // NEW: Real-time analyzers
         const momentumSignals = this.orderFlowMomentum.onTrade(classifiedTrade);
@@ -557,13 +572,36 @@ startStatusUpdates() {
     }
 
 
-    processBarClose(finalizedBar, analytics) {
+    async processBarClose(finalizedBar, analytics) {
+        
         const { closedCvd, divergence, whales, imbalances, signal, dom, vwapPack, checklist, deltaPatterns } = analytics;
         const absorptionPattern = this.absorptionDetector.detectAbsorption();
         const exhaustionPattern = this.exhaustionDetector.onBarClose(finalizedBar);
         const activeIcebergs = this.icebergDetector.getActiveIcebergs();
         const volumeImpact = this.volumeAnomalyDetector.getCumulativeBlockImpact();
         const domStats = this.enhancedDOMAnalyzer.getDOMStats();
+          const officialData = await BinanceVerification.getOfficialKline(
+    finalizedBar.startTime, 
+    finalizedBar.endTime
+  );
+
+ if (officialData) {
+    const volumeDiff = Math.abs(finalizedBar.totalBuyVolume + finalizedBar.totalSellVolume - officialData.volume);
+    const buyVolumeDiff = Math.abs(finalizedBar.totalBuyVolume - officialData.buyVolume);
+    
+    if (volumeDiff > 1.0 || buyVolumeDiff > 1.0) {
+      console.log(chalk.yellow('⚠️ Volume Verification:'), {
+        ourTotal: (finalizedBar.totalBuyVolume + finalizedBar.totalSellVolume).toFixed(2),
+        binanceTotal: officialData.volume.toFixed(2),
+        ourBuy: finalizedBar.totalBuyVolume.toFixed(2),
+        binanceBuy: officialData.buyVolume.toFixed(2),
+        volumeDiff: volumeDiff.toFixed(2),
+        buyDiff: buyVolumeDiff.toFixed(2)
+      });
+    }
+  }
+
+
         // === VISUAL CHECKLIST (NEW - BEFORE SNAPSHOT) ===
         const checklistSummary = this.visualChecklist.displayOrderFlowChecklist({
             rsi: this.rsiCalculator.getRSI(),

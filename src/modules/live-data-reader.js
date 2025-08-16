@@ -85,44 +85,52 @@ export class LiveDataReader {
     }
   }
 
-  processDataFile(fileInfo, onTradeData, onKlineData, onDepthData) {
-    try {
-      const data = JSON.parse(fs.readFileSync(fileInfo.path, 'utf8'));
-      
-      // Verify correct interval
-      if (data.interval !== this.interval) {
-        console.warn(`⚠️ Skipping file with wrong interval: ${data.interval} vs ${this.interval}`);
-        return;
-      }
-
-      // Process trades
-      if (data.trades && data.trades.length > 0) {
-        for (const trade of data.trades) {
-          onTradeData(trade.data);
-        }
-      }
-
-      // Process klines
-      if (data.klines && data.klines.length > 0) {
-        for (const kline of data.klines) {
-          onKlineData(kline.data);
-        }
-      }
-
-      // Process depth updates
-      if (data.depth && data.depth.length > 0) {
-        for (const depth of data.depth) {
-          onDepthData(depth.data);
-        }
-      }
-
-      // Update last processed timestamp
-      this.lastProcessedTimestamp = fileInfo.timestamp;
-      
-    } catch (error) {
-      console.error(chalk.red(`❌ Error processing file ${fileInfo.file}:`), error);
+processDataFile(fileInfo, onTradeData, onKlineData, onDepthData) {
+  try {
+    const data = JSON.parse(fs.readFileSync(fileInfo.path, 'utf8'));
+    
+    // Verify correct interval
+    if (data.interval !== this.interval) {
+      console.warn(`⚠️ Skipping file with wrong interval: ${data.interval} vs ${this.interval}`);
+      return;
     }
+
+    // Process trades
+    if (data.trades && data.trades.length > 0) {
+      for (const trade of data.trades) {
+        onTradeData(trade.data);
+      }
+    }
+
+    // Process klines
+    if (data.klines && data.klines.length > 0) {
+      for (const kline of data.klines) {
+        onKlineData(kline.data);
+      }
+    }
+
+    // FIX: Process depth updates to update order book manager
+    if (data.depth && data.depth.length > 0) {
+      for (const depth of data.depth) {
+        // Call onDepthData with the raw depth data structure that order book manager expects
+        const mockDepthMessage = {
+          bids: depth.data.bids.map(bid => [bid.price.toString(), bid.quantity.toString()]),
+          asks: depth.data.asks.map(ask => [ask.price.toString(), ask.quantity.toString()]),
+          u: Date.now(), // Update ID
+          s: data.symbol,
+          E: depth.timestamp
+        };
+        onDepthData(mockDepthMessage);
+      }
+    }
+
+    // Update last processed timestamp
+    this.lastProcessedTimestamp = fileInfo.timestamp;
+    
+  } catch (error) {
+    console.error(chalk.red(`❌ Error processing file ${fileInfo.file}:`), error);
   }
+}
 
   stopReading() {
     this.isReading = false;

@@ -6,7 +6,7 @@ import path from 'path';
 import { config } from '../config.js';
 import { OrderBookManager } from './modules/orderbook-manager.js';
 import { TradeClassifier } from './modules/trade-classifier.js';
-
+import { TimezoneFormatter } from './utils/timezone-formatter.js';
 class BinanceDataCollector {
   constructor() {
     this.symbol = config.symbol.toLowerCase();
@@ -63,44 +63,48 @@ class BinanceDataCollector {
     }, this.flushInterval);
   }
 
-  flushDataToDisk() {
-    const now = Date.now();
-    
-    // Only flush if we have data
-    if (this.dataBuffer.trades.length === 0 && 
-        this.dataBuffer.klines.length === 0 && 
-        this.dataBuffer.depth.length === 0) {
-      return;
-    }
-
-    const filename = `live_data_${this.interval}_${now}.json`;
-    const filepath = path.join(this.dataPath, filename);
-    
-    const dataPacket = {
-      timestamp: now,
-      interval: this.interval,
-      symbol: config.symbol,
-      trades: this.dataBuffer.trades,
-      klines: this.dataBuffer.klines,
-      depth: this.dataBuffer.depth
-    };
-
-    try {
-      fs.writeFileSync(filepath, JSON.stringify(dataPacket));
-      
-      // Clear buffers
-      this.dataBuffer.trades = [];
-      this.dataBuffer.klines = [];
-      this.dataBuffer.depth = [];
-      
-      // Clean up old files (keep only last 100 files)
-      this.cleanupOldFiles();
-      
-      console.log(chalk.gray(`💾 Flushed data: ${this.dataBuffer.trades.length + this.dataBuffer.klines.length + this.dataBuffer.depth.length} items`));
-    } catch (error) {
-      console.error(chalk.red('❌ Failed to save data:'), error);
-    }
+// src/data-collector.js - UPDATE flushDataToDisk method
+flushDataToDisk() {
+  const now = Date.now();
+  
+  // Count total items
+  const totalItems = this.dataBuffer.trades.length + this.dataBuffer.klines.length + this.dataBuffer.depth.length;
+  
+  // Only flush and log if we have data
+  if (totalItems === 0) {
+    return; // Don't log "0 items" - just return silently
   }
+
+  const filename = `live_data_${this.interval}_${now}.json`;
+  const filepath = path.join(this.dataPath, filename);
+  
+  const dataPacket = {
+    timestamp: now,
+    interval: this.interval,
+    symbol: config.symbol,
+    trades: this.dataBuffer.trades,
+    klines: this.dataBuffer.klines,
+    depth: this.dataBuffer.depth
+  };
+
+  try {
+    fs.writeFileSync(filepath, JSON.stringify(dataPacket));
+    
+    // Clear buffers
+    this.dataBuffer.trades = [];
+    this.dataBuffer.klines = [];
+    this.dataBuffer.depth = [];
+    
+    // Clean up old files
+    this.cleanupOldFiles();
+    
+    // ONLY LOG WHEN WE ACTUALLY HAVE DATA
+    console.log(chalk.gray(`💾 [${TimezoneFormatter.getCurrentTime()}] Flushed: ${totalItems} items (T:${dataPacket.trades.length} K:${dataPacket.klines.length} D:${dataPacket.depth.length})`));
+  } catch (error) {
+    console.error(chalk.red('❌ Failed to save data:'), error);
+  }
+}
+
 
   cleanupOldFiles() {
     try {
