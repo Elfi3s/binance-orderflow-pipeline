@@ -4,10 +4,18 @@ export class EnhancedDOMAnalyzer {
     this.domHistory = [];
     this.maxHistory = 100;
     this.spoofingThreshold = 1000; // ETH threshold for spoof detection
+    this.lastAnalysis = 0;
   }
 
   onDepthUpdate(depthData, orderBookManager) {
     const timestamp = Date.now();
+
+  // ADD COOLDOWN - Only analyze every 5 seconds
+  if (this.lastAnalysis && timestamp - this.lastAnalysis < 5000) {
+    return null;
+  }
+  this.lastAnalysis = timestamp;
+
     const topLevels = orderBookManager.getTopLevels(20);
     
     if (!topLevels) return null;
@@ -18,7 +26,7 @@ export class EnhancedDOMAnalyzer {
       asks: topLevels.asks.slice(0, 10),
       totalBidVolume: topLevels.bids.reduce((sum, level) => sum + level.quantity, 0),
       totalAskVolume: topLevels.asks.reduce((sum, level) => sum + level.quantity, 0),
-      spread: topLevels.asks[0].price - topLevels.bids.price
+      spread: topLevels.asks.price - topLevels.bids.price
     };
 
     this.domHistory.push(domSnapshot);
@@ -135,33 +143,35 @@ export class EnhancedDOMAnalyzer {
     return null;
   }
 
-  detectLiquidityImbalance(currentDOM) {
-    const ratio = currentDOM.totalBidVolume / currentDOM.totalAskVolume;
-    
-    if (ratio > 3.0) {
-      return {
-        type: 'EXTREME_BID_LIQUIDITY',
-        signal: 'BULLISH',
-        ratio: ratio,
-        bidVolume: currentDOM.totalBidVolume,
-        askVolume: currentDOM.totalAskVolume,
-        strength: Math.min(1.0, (ratio - 1) / 10)
-      };
-    }
-
-    if (ratio < 0.33) {
-      return {
-        type: 'EXTREME_ASK_LIQUIDITY',
-        signal: 'BEARISH',
-        ratio: ratio,
-        bidVolume: currentDOM.totalBidVolume,
-        askVolume: currentDOM.totalAskVolume,
-        strength: Math.min(1.0, (1 - ratio) / 0.67)
-      };
-    }
-
-    return null;
+detectLiquidityImbalance(currentDOM) {
+  const ratio = currentDOM.totalBidVolume / currentDOM.totalAskVolume;
+  
+  // MUCH HIGHER THRESHOLDS AND ADD COOLDOWN
+  if (ratio > 5.0) { // Changed from 3.0 to 5.0
+    return {
+      type: 'EXTREME_BID_LIQUIDITY',
+      signal: 'BULLISH',
+      ratio: ratio,
+      bidVolume: currentDOM.totalBidVolume,
+      askVolume: currentDOM.totalAskVolume,
+      strength: Math.min(1.0, (ratio - 1) / 15) // Reduced sensitivity
+    };
   }
+
+  if (ratio < 0.15) { // Changed from 0.33 to 0.15
+    return {
+      type: 'EXTREME_ASK_LIQUIDITY',
+      signal: 'BEARISH',
+      ratio: ratio,
+      bidVolume: currentDOM.totalBidVolume,
+      askVolume: currentDOM.totalAskVolume,
+      strength: Math.min(1.0, (1 - ratio) / 0.85) // Reduced sensitivity
+    };
+  }
+
+  return null;
+}
+
 
   getDOMStats() {
     if (this.domHistory.length === 0) return null;

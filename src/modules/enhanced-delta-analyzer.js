@@ -1,4 +1,4 @@
-// src/modules/enhanced-delta-analyzer.js
+// src/modules/enhanced-delta-analyzer.js - REPLACE ENTIRE FILE
 export class EnhancedDeltaAnalyzer {
   constructor() {
     this.barHistory = [];
@@ -35,24 +35,13 @@ export class EnhancedDeltaAnalyzer {
 
     const patterns = [];
 
-    // 1. DIVERGENCE PATTERNS
+    // ONLY THESE 3 - NO REDUNDANCY
     const divergence = this.analyzeDeltaDivergence();
-    if (divergence) patterns.push(divergence);
-
-    // 2. CONTINUATION PATTERNS  
     const continuation = this.analyzeContinuation();
-    if (continuation) patterns.push(continuation);
-
-    // 3. EXHAUSTION PATTERNS
-    const exhaustion = this.analyzeExhaustion();
-    if (exhaustion) patterns.push(exhaustion);
-
-    // 4. ABSORPTION PATTERNS (NEW)
-    const absorption = this.analyzeAbsorption();
-    if (absorption) patterns.push(absorption);
-
-    // 5. ACCELERATION PATTERNS
     const acceleration = this.analyzeAcceleration();
+
+    if (divergence) patterns.push(divergence);
+    if (continuation) patterns.push(continuation);
     if (acceleration) patterns.push(acceleration);
 
     return {
@@ -67,7 +56,6 @@ export class EnhancedDeltaAnalyzer {
     const deltaDirection = latest.delta > 0 ? 'POSITIVE' : 'NEGATIVE';
     const deltaStrength = Math.abs(latest.delta);
 
-    // Classic divergence patterns
     if (candleColor === 'GREEN' && deltaDirection === 'NEGATIVE' && deltaStrength > 200) {
       return {
         type: 'BEARISH_DELTA_DIVERGENCE',
@@ -128,64 +116,6 @@ export class EnhancedDeltaAnalyzer {
         confidence: acceleration ? 'HIGH' : 'MEDIUM',
         priority: 'MEDIUM'
       };
-    }
-
-    return null;
-  }
-
-  analyzeExhaustion() {
-    if (this.barHistory.length < 2) return null;
-
-    const current = this.barHistory[this.barHistory.length - 1];
-    const previous = this.barHistory[this.barHistory.length - 2];
-
-    const priceUp = current.close > previous.close;
-    const priceChange = Math.abs(current.close - previous.close);
-    const deltaWeakening = Math.abs(current.delta) < Math.abs(previous.delta) * 0.4;
-    const volumeSpike = current.volume > previous.volume * 1.5;
-
-    if (deltaWeakening && volumeSpike && priceChange > 3) {
-      return {
-        type: 'DELTA_EXHAUSTION',
-        signal: priceUp ? 'BEARISH' : 'BULLISH',
-        strength: 0.75,
-        description: `Exhaustion: ${priceUp ? 'Up' : 'Down'} move with weak delta (${current.delta.toFixed(0)}) and high volume`,
-        confidence: volumeSpike > 2.0 ? 'HIGH' : 'MEDIUM',
-        priority: 'HIGH'
-      };
-    }
-
-    return null;
-  }
-
-  analyzeAbsorption() {
-    if (this.barHistory.length < 2) return null;
-
-    const current = this.barHistory[this.barHistory.length - 1];
-    const previous = this.barHistory[this.barHistory.length - 2];
-
-    // Absorption: Large volume, small price movement, delta in opposite direction
-    const smallPriceMove = Math.abs(current.close - previous.close) < 8;
-    const largeVolume = current.volume > 1500;
-    const significantDelta = Math.abs(current.delta) > 300;
-    const priceDirection = current.close > previous.close ? 'UP' : 'DOWN';
-    const deltaDirection = current.delta > 0 ? 'BUYING' : 'SELLING';
-
-    if (smallPriceMove && largeVolume && significantDelta) {
-      // Buying absorption during down move or selling absorption during up move
-      const isAbsorption = (priceDirection === 'DOWN' && deltaDirection === 'BUYING') ||
-                          (priceDirection === 'UP' && deltaDirection === 'SELLING');
-      
-      if (isAbsorption) {
-        return {
-          type: 'ABSORPTION_PATTERN',
-          signal: deltaDirection === 'BUYING' ? 'BULLISH' : 'BEARISH',
-          strength: 0.7,
-          description: `${deltaDirection.toLowerCase()} absorption: High volume (${current.volume.toFixed(0)}), small price move, ${Math.abs(current.delta).toFixed(0)} delta`,
-          confidence: largeVolume > 2500 ? 'HIGH' : 'MEDIUM',
-          priority: 'HIGH'
-        };
-      }
     }
 
     return null;

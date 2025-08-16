@@ -9,10 +9,10 @@
   },
   "scripts": {
     "start": "node src/app.js",
-    "dev": "node --watch src\\app.js",
-    "test": "node src\\test.js",
-    "build": "echo Building for production...",
-    "clean": "rmdir /s /q data\\snapshots && md data\\snapshots"
+    "collect": "node src/data-collector.js", 
+    "dev": "node --watch src/app.js",
+    "dev-collect": "node --watch src/data-collector.js",
+    "test": "node src/test.js"
   },
   "dependencies": {
     "ws": "^8.18.0",

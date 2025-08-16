@@ -26,13 +26,22 @@ import { IcebergDetector } from './modules/iceberg-detector.js';
 import { VolumeAnomalyDetector } from './modules/volume-anomaly-detector.js';
 import { ExhaustionDetector } from './modules/exhaustion-detector.js';
 import { EnhancedDOMAnalyzer } from './modules/enhanced-dom-analyzer.js';
+import { HistoricalLoader } from './modules/historical-loader.js';
+
+import { SpreadAnalyzer } from './modules/spread-analyzer.js';
+import { OrderFlowMomentumAnalyzer } from './modules/orderflow-momentum-analyzer.js';
+import { DOMPressureAnalyzer } from './modules/dom-pressure-analyzer.js';
+import { VolumeFlowAnalyzer } from './modules/volume-flow-analyzer.js';
+import { TimeframeStorageManager } from './modules/timeframe-storage-manager.js';
+import { LiveDataReader } from './modules/live-data-reader.js';
+
 class BinanceOrderFlowPipeline {
     constructor() {
 
         this.logger = new Logger();
         this.logger.info('Pipeline initialized', { symbol: config.symbol, interval: config.interval });
         this.symbol = config.symbol.toLowerCase();
-        this.connections = new Map();
+        //this.connections = new Map();
 
         // Initialize all modules
         this.orderBookManager = new OrderBookManager();
@@ -48,14 +57,28 @@ class BinanceOrderFlowPipeline {
         this.reliabilityScorer = new ReliabilityScorer();
         this.checklist = new Checklist();
         globalThis.TICK_SIZE = config.tickSize;
-// WITH:
-this.enhancedDeltaAnalyzer = new EnhancedDeltaAnalyzer();
-this.visualChecklist = new VisualChecklist();
-this.absorptionDetector = new AbsorptionDetector();
-this.icebergDetector = new IcebergDetector();
-this.volumeAnomalyDetector = new VolumeAnomalyDetector();
-this.exhaustionDetector = new ExhaustionDetector();
-this.enhancedDOMAnalyzer = new EnhancedDOMAnalyzer();
+        // WITH:
+        this.enhancedDeltaAnalyzer = new EnhancedDeltaAnalyzer();
+        this.visualChecklist = new VisualChecklist();
+        this.absorptionDetector = new AbsorptionDetector();
+        this.icebergDetector = new IcebergDetector();
+        this.volumeAnomalyDetector = new VolumeAnomalyDetector();
+        this.exhaustionDetector = new ExhaustionDetector();
+        this.enhancedDOMAnalyzer = new EnhancedDOMAnalyzer();
+
+        this.historicalLoader = new HistoricalLoader();
+
+        this.spreadAnalyzer = new SpreadAnalyzer();
+
+
+
+        this.orderFlowMomentum = new OrderFlowMomentumAnalyzer();
+        this.domPressureAnalyzer = new DOMPressureAnalyzer();
+        this.volumeFlowAnalyzer = new VolumeFlowAnalyzer();
+        this.storageManager = new TimeframeStorageManager();
+        this.liveDataReader = new LiveDataReader();
+        this.storageManager = new TimeframeStorageManager();
+
         // Ensure output directories exist (Windows)
         this.ensureDirectories();
 
@@ -92,10 +115,23 @@ this.enhancedDOMAnalyzer = new EnhancedDOMAnalyzer();
             console.log(chalk.yellow('⚙️ Initializing RSI with historical data...'));
             await this.rsiInitializer.initializeRSIWithHistory(this.rsiCalculator, 20);
 
-            await this.connectWebSockets();
-            console.log(chalk.green('✅ All WebSocket connections established'));
-            console.log(chalk.yellow('Press Ctrl+C to stop the pipeline gracefully'));
+            // Load recent historical bars for continuity
+            console.log(chalk.yellow('⚙️ Loading recent historical bars...'));
+            const recentBars = await this.historicalLoader.loadRecentBars();
+            console.log(chalk.green(`✅ Loaded ${recentBars.length} recent bars for continuity`));
 
+            // await this.connectWebSockets();
+            // console.log(chalk.green('✅ All WebSocket connections established'));
+            // console.log(chalk.yellow('Press Ctrl+C to stop the pipeline gracefully'));
+            console.log(chalk.yellow('⚙️ Starting live data reader...'));
+            this.liveDataReader.startReading(
+                (tradeData) => this.handleTradeData({ data: tradeData }), // Wrap to match original format
+                (klineData) => this.handleKlineData(klineData),
+                (depthData) => this.handleDepthData(depthData)
+            );
+
+            console.log(chalk.green('✅ Analysis pipeline ready - processing live data'));
+            console.log(chalk.yellow('📊 Reading data from collector...'));
             // Start status updates
             this.startStatusUpdates();
 
@@ -104,179 +140,187 @@ this.enhancedDOMAnalyzer = new EnhancedDOMAnalyzer();
         }
     }
 
-    startStatusUpdates() {
-        // Show summary every 30 seconds
-        setInterval(() => {
-            const currentBar = this.barAggregator.getCurrentBar();
-            const obStats = this.orderBookManager.getStats();
-            const recentTrades = this.tradeClassifier.getRecentTrades(30000);
-            const rsiStats = this.rsiCalculator.getStats();
+startStatusUpdates() {
+  // Show summary every 30 seconds
+  setInterval(() => {
+    const currentBar = this.barAggregator.getCurrentBar();
+    const obStats = this.orderBookManager.getStats();
+    const recentTrades = this.tradeClassifier.getRecentTrades(30000);
+    const rsiStats = this.rsiCalculator.getStats();
 
-            console.log(chalk.magenta('════════════════════════════════════════'));
-            console.log(chalk.blue('📊 COMPLETE PIPELINE STATUS'));
-            const cvdStats = this.cvdAnalyzer.getSnapshotStats();
-            const whaleLast = this.whaleDetector.getLast();
-            console.log(chalk.green('📈 Flow Stats:'), {
-                cvd: cvdStats.cvd,
-                whales: whaleLast.detected
-                    ? { count: whaleLast.count, net: whaleLast.netFlow, thr: whaleLast.threshold }
-                    : 'none'
-            });
+    console.log(chalk.magenta('════════════════════════════════════════'));
+    console.log(chalk.blue('📊 COMPLETE PIPELINE STATUS'));
+    const cvdStats = this.cvdAnalyzer.getSnapshotStats();
+    const whaleLast = this.whaleDetector.getLast();
+    console.log(chalk.green('📈 Flow Stats:'), {
+      cvd: cvdStats.cvd,
+      whales: whaleLast.detected
+        ? { count: whaleLast.count, net: whaleLast.netFlow, thr: whaleLast.threshold }
+        : 'none'
+    });
 
-            if (currentBar) {
-                console.log(chalk.green(`📋 Current ${config.interval.toUpperCase()} Bar:`), {
-                    start: new Date(currentBar.startTime).toLocaleString('en-US', { timeZone: 'UTC' }),
-                    footprintLevels: currentBar.footprint.size,
-                    totalBuyVol: currentBar.totalBuyVolume.toFixed(2),
-                    totalSellVol: currentBar.totalSellVolume.toFixed(2),
-                    netDelta: currentBar.totalDelta.toFixed(2),
-                    poc: `${currentBar.poc.price} (${currentBar.poc.volume.toFixed(2)})`
-                });
-            }
-
-            console.log(chalk.cyan('💰 Recent Activity (30s):'), {
-                trades: recentTrades.length,
-                buyTrades: recentTrades.filter(t => t.side === 'BUY').length,
-                sellTrades: recentTrades.filter(t => t.side === 'SELL').length
-            });
-
-            console.log(chalk.yellow(`📈 RSI Analysis (${config.interval.toUpperCase()}):`), {
-                rsi: rsiStats.rsi,
-                signal: rsiStats.signal,
-                trend: rsiStats.trend,
-                dataPoints: rsiStats.dataPoints
-            });
-
-            // Check current imbalances
-            const domData = this.orderBookManager.getTopLevels(20);
-            const imbalances = this.imbalanceDetector.detectImbalances(null, domData);
-            const imbalanceStats = this.imbalanceDetector.getImbalanceStats();
-
-            console.log(chalk.red('⚖️ Current Imbalances:'), {
-                total: imbalances.length,
-                buy: imbalances.filter(i => i.direction === 'BUY').length,
-                sell: imbalances.filter(i => i.direction === 'SELL').length,
-                avgStrength: imbalanceStats.avgStrength
-            });
-
-
-            // Get live intrabar VWAP metrics
-            const liveVP = this.volumeProfile.getLiveMetrics();
-
-            // Log in the status summary
-            console.log(chalk.cyan('📊 Intrabar VWAP Preview:'), {
-                vwap: liveVP.vwap,
-                poc: liveVP.poc.price,
-                pocVolume: liveVP.poc.volume,
-                totalVol: liveVP.totalVolume
-            });
-            console.log(chalk.gray('📖 Order Book:'), {
-                bidLevels: obStats.bidLevels,
-                askLevels: obStats.askLevels,
-                bestBid: obStats.bid?.toFixed(2),
-                bestAsk: obStats.ask?.toFixed(2),
-                spread: obStats.spread?.toFixed(4)
-            });
-            console.log(chalk.magenta('════════════════════════════════════════'));
-        }, 30000); // Every 30 seconds
+    if (currentBar) {
+      console.log(chalk.green(`📋 Current ${config.interval.toUpperCase()} Bar:`), {
+        start: new Date(currentBar.startTime).toLocaleString('en-US', { timeZone: 'UTC' }),
+        footprintLevels: currentBar.footprint.size,
+        totalBuyVol: currentBar.totalBuyVolume.toFixed(2),
+        totalSellVol: currentBar.totalSellVolume.toFixed(2),
+        netDelta: currentBar.totalDelta.toFixed(2),
+        poc: `${currentBar.poc.price} (${currentBar.poc.volume.toFixed(2)})`
+      });
     }
 
-    async connectWebSockets() {
-        this.connectKlineStream();
-        this.connectAggTradeStream();
-        this.connectDepthStream();
-        await new Promise(resolve => setTimeout(resolve, 2000));
+    console.log(chalk.cyan('💰 Recent Activity (30s):'), {
+      trades: recentTrades.length,
+      buyTrades: recentTrades.filter(t => t.side === 'BUY').length,
+      sellTrades: recentTrades.filter(t => t.side === 'SELL').length
+    });
+
+    console.log(chalk.yellow(`📈 RSI Analysis (${config.interval.toUpperCase()}):`), {
+      rsi: rsiStats.rsi,
+      signal: rsiStats.signal,
+      trend: rsiStats.trend,
+      dataPoints: rsiStats.dataPoints
+    });
+
+    // Check current imbalances
+    const domData = this.orderBookManager.getTopLevels(20);
+    const imbalances = this.imbalanceDetector.detectImbalances(null, domData);
+    const imbalanceStats = this.imbalanceDetector.getImbalanceStats();
+
+    console.log(chalk.red('⚖️ Current Imbalances:'), {
+      total: imbalances.length,
+      buy: imbalances.filter(i => i.direction === 'BUY').length,
+      sell: imbalances.filter(i => i.direction === 'SELL').length,
+      avgStrength: imbalanceStats.avgStrength
+    });
+
+    // Get live intrabar VWAP metrics
+    const liveVP = this.volumeProfile.getLiveMetrics();
+
+    console.log(chalk.cyan('📊 Intrabar VWAP Preview:'), {
+      vwap: liveVP.vwap,
+      poc: liveVP.poc.price,
+      pocVolume: liveVP.poc.volume,
+      totalVol: liveVP.totalVolume
+    });
+    
+    console.log(chalk.gray('📖 Order Book:'), {
+      bidLevels: obStats.bidLevels,
+      askLevels: obStats.askLevels,
+      bestBid: obStats.bid?.toFixed(2),
+      bestAsk: obStats.ask?.toFixed(2),
+      spread: obStats.spread?.toFixed(4)
+    });
+
+    // ADD ONLY REAL-TIME SIGNAL SUMMARY (NO SPAMMY DETAILS)
+    const activeIcebergs = this.icebergDetector.getActiveIcebergs().length;
+    if (activeIcebergs > 0) {
+      console.log(chalk.blue('🎯 Active Signals:'), {
+        icebergs: activeIcebergs
+      });
     }
+    
+    console.log(chalk.magenta('════════════════════════════════════════'));
+  }, 30000); // Every 30 seconds
+}
 
-    connectKlineStream() {
-        const klineUrl = `${config.wsUrls.futures}/ws/${this.symbol}@kline_${config.interval}`;
-        console.log(chalk.yellow('🔌 Connecting to kline stream...'));
+    // async connectWebSockets() {
+    //     this.connectKlineStream();
+    //     this.connectAggTradeStream();
+    //     this.connectDepthStream();
+    //     await new Promise(resolve => setTimeout(resolve, 2000));
+    // }
 
-        const ws = new WebSocket(klineUrl);
+    // connectKlineStream() {
+    //     const klineUrl = `${config.wsUrls.futures}/ws/${this.symbol}@kline_${config.interval}`;
+    //     console.log(chalk.yellow('🔌 Connecting to kline stream...'));
 
-        ws.on('open', () => {
-            console.log(chalk.green('✅ Kline stream connected'));
-        });
+    //     const ws = new WebSocket(klineUrl);
 
-        ws.on('message', (data) => {
-            try {
-                const message = JSON.parse(data.toString());
-                this.handleKlineData(message);
-            } catch (error) {
-                console.error(chalk.red('❌ Kline data parsing error:'), error);
-            }
-        });
+    //     ws.on('open', () => {
+    //         console.log(chalk.green('✅ Kline stream connected'));
+    //     });
 
-        ws.on('error', (error) => {
-            console.error(chalk.red('❌ Kline WebSocket error:'), error);
-        });
+    //     ws.on('message', (data) => {
+    //         try {
+    //             const message = JSON.parse(data.toString());
+    //             this.handleKlineData(message);
+    //         } catch (error) {
+    //             console.error(chalk.red('❌ Kline data parsing error:'), error);
+    //         }
+    //     });
 
-        ws.on('close', (code, reason) => {
-            console.log(chalk.yellow(`🔌 Kline connection closed: ${code} - ${reason}`));
-        });
+    //     ws.on('error', (error) => {
+    //         console.error(chalk.red('❌ Kline WebSocket error:'), error);
+    //     });
 
-        this.connections.set('kline', ws);
-    }
+    //     ws.on('close', (code, reason) => {
+    //         console.log(chalk.yellow(`🔌 Kline connection closed: ${code} - ${reason}`));
+    //     });
 
-    connectAggTradeStream() {
-        const tradeUrl = `${config.wsUrls.futures}/ws/${this.symbol}@aggTrade`;
-        console.log(chalk.yellow('🔌 Connecting to trade stream...'));
+    //     this.connections.set('kline', ws);
+    // }
 
-        const ws = new WebSocket(tradeUrl);
+    // connectAggTradeStream() {
+    //     const tradeUrl = `${config.wsUrls.futures}/ws/${this.symbol}@aggTrade`;
+    //     console.log(chalk.yellow('🔌 Connecting to trade stream...'));
 
-        ws.on('open', () => {
-            console.log(chalk.green('✅ Trade stream connected'));
-        });
+    //     const ws = new WebSocket(tradeUrl);
 
-        ws.on('message', (data) => {
-            try {
-                const message = JSON.parse(data.toString());
-                this.handleTradeData(message);
-            } catch (error) {
-                console.error(chalk.red('❌ Trade data parsing error:'), error);
-            }
-        });
+    //     ws.on('open', () => {
+    //         console.log(chalk.green('✅ Trade stream connected'));
+    //     });
 
-        ws.on('error', (error) => {
-            console.error(chalk.red('❌ Trade WebSocket error:'), error);
-        });
+    //     ws.on('message', (data) => {
+    //         try {
+    //             const message = JSON.parse(data.toString());
+    //             this.handleTradeData(message);
+    //         } catch (error) {
+    //             console.error(chalk.red('❌ Trade data parsing error:'), error);
+    //         }
+    //     });
 
-        ws.on('close', (code, reason) => {
-            console.log(chalk.yellow(`🔌 Trade connection closed: ${code} - ${reason}`));
-        });
+    //     ws.on('error', (error) => {
+    //         console.error(chalk.red('❌ Trade WebSocket error:'), error);
+    //     });
 
-        this.connections.set('trade', ws);
-    }
+    //     ws.on('close', (code, reason) => {
+    //         console.log(chalk.yellow(`🔌 Trade connection closed: ${code} - ${reason}`));
+    //     });
 
-    connectDepthStream() {
-        const depthUrl = `${config.wsUrls.futures}/ws/${this.symbol}@depth@100ms`;
-        console.log(chalk.yellow('🔌 Connecting to depth stream...'));
+    //     this.connections.set('trade', ws);
+    // }
 
-        const ws = new WebSocket(depthUrl);
+    // connectDepthStream() {
+    //     const depthUrl = `${config.wsUrls.futures}/ws/${this.symbol}@depth@100ms`;
+    //     console.log(chalk.yellow('🔌 Connecting to depth stream...'));
 
-        ws.on('open', () => {
-            console.log(chalk.green('✅ Depth stream connected'));
-        });
+    //     const ws = new WebSocket(depthUrl);
 
-        ws.on('message', (data) => {
-            try {
-                const message = JSON.parse(data.toString());
-                this.handleDepthData(message);
-            } catch (error) {
-                console.error(chalk.red('❌ Depth data parsing error:'), error);
-            }
-        });
+    //     ws.on('open', () => {
+    //         console.log(chalk.green('✅ Depth stream connected'));
+    //     });
 
-        ws.on('error', (error) => {
-            console.error(chalk.red('❌ Depth WebSocket error:'), error);
-        });
+    //     ws.on('message', (data) => {
+    //         try {
+    //             const message = JSON.parse(data.toString());
+    //             this.handleDepthData(message);
+    //         } catch (error) {
+    //             console.error(chalk.red('❌ Depth data parsing error:'), error);
+    //         }
+    //     });
 
-        ws.on('close', (code, reason) => {
-            console.log(chalk.yellow(`🔌 Depth connection closed: ${code} - ${reason}`));
-        });
+    //     ws.on('error', (error) => {
+    //         console.error(chalk.red('❌ Depth WebSocket error:'), error);
+    //     });
 
-        this.connections.set('depth', ws);
-    }
+    //     ws.on('close', (code, reason) => {
+    //         console.log(chalk.yellow(`🔌 Depth connection closed: ${code} - ${reason}`));
+    //     });
+
+    //     this.connections.set('depth', ws);
+    // }
 
     handleKlineData(message) {
         const kline = message.k;
@@ -287,13 +331,13 @@ this.enhancedDOMAnalyzer = new EnhancedDOMAnalyzer();
         }
 
         // Log occasionally so the console isn’t spammed
-        if (Date.now() % 60000 < 5000) {
-            console.log(chalk.blue('📊 Kline Update:'), {
-                close: parseFloat(kline.c).toFixed(2),
-                volume: parseFloat(kline.v).toFixed(2),
-                rsi: this.rsiCalculator.getRSI()
-            });
-        }
+        // if (Date.now() % 60000 < 5000) {
+        //     console.log(chalk.blue('📊 Kline Update:'), {
+        //         close: parseFloat(kline.c).toFixed(2),
+        //         volume: parseFloat(kline.v).toFixed(2),
+        //         rsi: this.rsiCalculator.getRSI()
+        //     });
+        // }
 
         // Feed kline into the bar aggregator
         const finalizedBar = this.barAggregator.handleKlineUpdate(message);
@@ -400,7 +444,12 @@ this.enhancedDOMAnalyzer = new EnhancedDOMAnalyzer();
 
 
     handleTradeData(message) {
-        const classifiedTrade = this.tradeClassifier.classifyTrade(message);
+        let classifiedTrade;
+        if (message.data) {
+            classifiedTrade = message.data; // From data reader
+        } else {
+            classifiedTrade = this.tradeClassifier.classifyTrade(message); // Direct WebSocket format
+        }
         this.barAggregator.addTradeToBar(classifiedTrade);
         // Feed Volume Profile for VWAP/Value Area
         this.volumeProfile.addTrade(classifiedTrade.price, classifiedTrade.quantity);
@@ -419,19 +468,41 @@ this.enhancedDOMAnalyzer = new EnhancedDOMAnalyzer();
             time: classifiedTrade.time,
             price: classifiedTrade.price
         });
-// NEW: Feed new analyzers
-  this.absorptionDetector.onTrade(classifiedTrade);
-  const icebergDetection = this.icebergDetector.onTrade(classifiedTrade);
-  const volumeAnomaly = this.volumeAnomalyDetector.onTrade(classifiedTrade);
+        // NEW: Feed new analyzers
+        this.absorptionDetector.onTrade(classifiedTrade);
+        const icebergDetection = this.icebergDetector.onTrade(classifiedTrade);
+        const volumeAnomaly = this.volumeAnomalyDetector.onTrade(classifiedTrade);
 
-  // Log significant detections
-  if (icebergDetection) {
-    console.log(chalk.cyan('🧊 Iceberg Order Detected:'), icebergDetection);
-  }
-  
-  if (volumeAnomaly) {
-    console.log(chalk.yellow('📊 Volume Anomaly:'), volumeAnomaly);
-  }
+        // Log significant detections
+        if (icebergDetection) {
+            console.log(chalk.blue('🧊 Iceberg Order:'), `${icebergDetection.signal} at ${icebergDetection.price} - ${icebergDetection.totalVolume.toFixed(0)} ETH`);
+        }
+
+        if (volumeAnomaly && volumeAnomaly.type === 'BLOCK_TRADE_CLUSTER') {
+            console.log(chalk.magenta('📊 Block Trade Cluster:'), `${volumeAnomaly.signal} - ${volumeAnomaly.tradeVolume.toFixed(0)} ETH`);
+        }
+
+        // NEW: Real-time analyzers
+        const momentumSignals = this.orderFlowMomentum.onTrade(classifiedTrade);
+        const volumeFlowSignals = this.volumeFlowAnalyzer.onTrade(classifiedTrade);
+
+        // Log significant real-time signals
+
+        if (momentumSignals && momentumSignals.length > 0) {
+            momentumSignals.forEach(signal => {
+                if (signal.confidence >= 80) { // INCREASED from 70 to 80
+                    console.log(chalk.cyan(`🔄 [${signal.window}s] ${signal.signal} Momentum: ${signal.confidence}% conf, ${signal.volume.toFixed(0)} ETH`));
+                }
+            });
+        }
+
+        if (volumeFlowSignals && volumeFlowSignals.length > 0) {
+            volumeFlowSignals.forEach(signal => {
+                if (signal.confidence >= 85) { // INCREASED from 70 to 85
+                    console.log(chalk.yellow(`💨 [${signal.timeframe}s] ${signal.signal} Flow: ${signal.type.replace('_', ' ')} (${(signal.strength * 100).toFixed(0)}%)`));
+                }
+            });
+        }
         // Occasionally detect clusters (whales)
         if (classifiedTrade.tradeId % 300 === 0) {
             this.whaleDetector.detectCluster();
@@ -452,126 +523,148 @@ this.enhancedDOMAnalyzer = new EnhancedDOMAnalyzer();
         }
     }
 
-handleDepthData(message) {
-  const success = this.orderBookManager.handleDepthUpdate(message);
-  
-  // NEW: Enhanced DOM analysis
-  const domPatterns = this.enhancedDOMAnalyzer.onDepthUpdate(message, this.orderBookManager);
-  if (domPatterns) {
-    console.log(chalk.magenta('📚 DOM Patterns:'), domPatterns);
-  }
-}
+    handleDepthData(depthData) {
+        // Handle both direct data and message formats
+        let processedData;
+        if (depthData.bids && depthData.asks) {
+            // Direct depth data from reader
+            processedData = depthData;
+        } else {
+            // Original WebSocket message format
+            this.orderBookManager.handleDepthUpdate(depthData);
+            const topLevels = this.orderBookManager.getTopLevels(10);
+            processedData = topLevels;
+        }
 
+        if (processedData) {
+            // Enhanced DOM analysis - LESS FREQUENT LOGGING
+            const domPatterns = this.enhancedDOMAnalyzer.onDepthUpdate(depthData, this.orderBookManager);
+            if (domPatterns) {
+                // Only log if strength > 0.7 to reduce spam
+                domPatterns.filter(pattern => pattern.strength > 0.7).forEach(pattern => {
+                    console.log(chalk.magenta(`📚 ${pattern.type.replace('_', ' ')}: ${pattern.signal} (${(pattern.strength * 100).toFixed(0)}%)`));
+                });
+            }
 
-processBarClose(finalizedBar, analytics) {
-  const { closedCvd, divergence, whales, imbalances, signal, dom, vwapPack, checklist, deltaPatterns } = analytics;
-const absorptionPattern = this.absorptionDetector.detectAbsorption();
-const exhaustionPattern = this.exhaustionDetector.onBarClose(finalizedBar);
-const activeIcebergs = this.icebergDetector.getActiveIcebergs();
-const volumeImpact = this.volumeAnomalyDetector.getCumulativeBlockImpact();
-const domStats = this.enhancedDOMAnalyzer.getDOMStats();
-  // === VISUAL CHECKLIST (NEW - BEFORE SNAPSHOT) ===
-  const checklistSummary = this.visualChecklist.displayOrderFlowChecklist({
-    rsi: this.rsiCalculator.getRSI(),
-    price: finalizedBar.ohlc.close,
-    vwap: vwapPack.vwap,
-    valueAreaLow: vwapPack.valueAreaLow,
-    valueAreaHigh: vwapPack.valueAreaHigh,
-    cvd: closedCvd,
-    divergence,
-    whales,
-    imbalances,
-    deltaPatterns,
-    finalizedBar,
-    interval: config.interval
-  });
-
-  const snapshot = {
-    timestamp: Date.now(),
-    barStart: finalizedBar.startTime,
-    barEnd: finalizedBar.endTime,
-    symbol: config.symbol,
-    
-    // Enhanced analytics
-    deltaPatterns: deltaPatterns,
-    visualChecklistSummary: checklistSummary, // NEW
-    
-    // ... rest of existing fields ...
-    priceladder: finalizedBar.footprintArray,
-    barTotals: {
-      totalBuy: finalizedBar.totalBuyVolume,
-      totalSell: finalizedBar.totalSellVolume,
-      totalVolume: finalizedBar.totalBuyVolume + finalizedBar.totalSellVolume,
-      netDelta: finalizedBar.totalDelta
-    },
-    ohlc: finalizedBar.ohlc,
-    poc: finalizedBar.poc,
-    dom: dom,
-    rsi: this.rsiCalculator.getRSI(),
-    cvd: {
-      barCvd: closedCvd,
-      divergence: divergence
-    },
-    whales: whales,
-    imbalanceSummary: imbalances,
-    volumeProfile: {
-      vwap: vwapPack.vwap,
-      valueAreaLow: vwapPack.valueAreaLow,
-      valueAreaHigh: vwapPack.valueAreaHigh,
-      poc: vwapPack.poc,
-      totalVolume: vwapPack.totalVolume
-    },
-    checklist: {
-      ...checklist.checklist,
-      longConfluence: checklist.longConfluence,
-      shortConfluence: checklist.shortConfluence
-    },
-    signal: signal,
-    absorptionPattern: absorptionPattern,
-exhaustionPattern: exhaustionPattern,
-activeIcebergs: activeIcebergs,
-volumeImpact: volumeImpact,
-domStats: domStats
-  };
-
-  const fileName = `footprint_complete_${Date.now()}.json`;
-  const filePath = path.join(config.outputPath, fileName);
-
-  try {
-    fs.writeFileSync(filePath, JSON.stringify(snapshot, null, 2));
-    console.log(chalk.green(`✅ COMPLETE ${config.interval.toUpperCase()} footprint snapshot saved: ${filePath}`));
-    
-    // SIMPLE SUMMARY AFTER VISUAL CHECKLIST
-    console.log(chalk.blue('📋 QUICK SUMMARY:'), {
-      interval: config.interval.toUpperCase(),
-      assessment: checklistSummary.overallSignal,
-      confidence: `${checklistSummary.confidence}%`,
-      rsi: this.rsiCalculator.getRSI(),
-      delta: finalizedBar.totalDelta.toFixed(0),
-      patterns: deltaPatterns.summary.totalPatterns
-    });
-    
-  } catch (err) {
-    console.error(chalk.red('❌ Failed to save snapshot:'), err);
-  }
-}
-
-
-
-
-close() {
-    console.log(chalk.yellow('🔌 Closing all WebSocket connections...'));
-
-    for (const [name, ws] of this.connections) {
-        if (ws.readyState === WebSocket.OPEN) {
-            ws.close();
-            console.log(chalk.gray(`❌ ${name} connection closed`));
+            // DOM Pressure Analysis - LESS FREQUENT
+            const domPressureSignals = this.domPressureAnalyzer.onDepthUpdate(processedData);
+            if (domPressureSignals) {
+                domPressureSignals.forEach(signal => {
+                    console.log(chalk.red(`🏗️  ${signal.type.replace('_', ' ')}: ${signal.signal} (${(signal.strength * 100).toFixed(0)}%)`));
+                });
+            }
         }
     }
 
-    this.connections.clear();
-    console.log(chalk.blue('👋 Complete pipeline shutdown'));
-}
+
+    processBarClose(finalizedBar, analytics) {
+        const { closedCvd, divergence, whales, imbalances, signal, dom, vwapPack, checklist, deltaPatterns } = analytics;
+        const absorptionPattern = this.absorptionDetector.detectAbsorption();
+        const exhaustionPattern = this.exhaustionDetector.onBarClose(finalizedBar);
+        const activeIcebergs = this.icebergDetector.getActiveIcebergs();
+        const volumeImpact = this.volumeAnomalyDetector.getCumulativeBlockImpact();
+        const domStats = this.enhancedDOMAnalyzer.getDOMStats();
+        // === VISUAL CHECKLIST (NEW - BEFORE SNAPSHOT) ===
+        const checklistSummary = this.visualChecklist.displayOrderFlowChecklist({
+            rsi: this.rsiCalculator.getRSI(),
+            price: finalizedBar.ohlc.close,
+            vwap: vwapPack.vwap,
+            valueAreaLow: vwapPack.valueAreaLow,
+            valueAreaHigh: vwapPack.valueAreaHigh,
+            cvd: closedCvd,
+            divergence,
+            whales,
+            imbalances,
+            deltaPatterns,
+            finalizedBar,
+            interval: config.interval
+        });
+
+        const snapshot = {
+            timestamp: Date.now(),
+            barStart: finalizedBar.startTime,
+            barEnd: finalizedBar.endTime,
+            symbol: config.symbol,
+            interval: config.interval, // ADD this
+            // Enhanced analytics
+            deltaPatterns: deltaPatterns,
+            visualChecklistSummary: checklistSummary, // NEW
+
+            // ... rest of existing fields ...
+            priceladder: finalizedBar.footprintArray,
+            barTotals: {
+                totalBuy: finalizedBar.totalBuyVolume,
+                totalSell: finalizedBar.totalSellVolume,
+                totalVolume: finalizedBar.totalBuyVolume + finalizedBar.totalSellVolume,
+                netDelta: finalizedBar.totalDelta
+            },
+            ohlc: finalizedBar.ohlc,
+            poc: finalizedBar.poc,
+            dom: dom,
+            rsi: this.rsiCalculator.getRSI(),
+            cvd: {
+                barCvd: closedCvd,
+                divergence: divergence
+            },
+            whales: whales,
+            imbalanceSummary: imbalances,
+            volumeProfile: {
+                vwap: vwapPack.vwap,
+                valueAreaLow: vwapPack.valueAreaLow,
+                valueAreaHigh: vwapPack.valueAreaHigh,
+                poc: vwapPack.poc,
+                totalVolume: vwapPack.totalVolume
+            },
+            checklist: {
+                ...checklist.checklist,
+                longConfluence: checklist.longConfluence,
+                shortConfluence: checklist.shortConfluence
+            },
+            signal: signal,
+            absorptionPattern: absorptionPattern,
+            exhaustionPattern: exhaustionPattern,
+            activeIcebergs: activeIcebergs,
+            volumeImpact: volumeImpact,
+            domStats: domStats
+        };
+
+
+
+        try {
+            const savedPath = this.storageManager.saveSnapshot(snapshot);
+            console.log(chalk.green(`✅ COMPLETE ${config.interval.toUpperCase()} footprint snapshot saved: ${savedPath}`));
+
+            // SIMPLE SUMMARY AFTER VISUAL CHECKLIST
+            console.log(chalk.blue('📋 QUICK SUMMARY:'), {
+                interval: config.interval.toUpperCase(),
+                assessment: checklistSummary.overallSignal,
+                confidence: `${checklistSummary.confidence}%`,
+                rsi: this.rsiCalculator.getRSI(),
+                delta: finalizedBar.totalDelta.toFixed(0),
+                patterns: deltaPatterns.summary.totalPatterns
+            });
+
+        } catch (err) {
+            console.error(chalk.red('❌ Failed to save snapshot:'), err);
+        }
+    }
+
+
+
+
+    // close() {
+    //     console.log(chalk.yellow('🔌 Closing all WebSocket connections...'));
+
+    //     for (const [name, ws] of this.connections) {
+    //         if (ws.readyState === WebSocket.OPEN) {
+    //             ws.close();
+    //             console.log(chalk.gray(`❌ ${name} connection closed`));
+    //         }
+    //     }
+
+    //     this.connections.clear();
+    //     console.log(chalk.blue('👋 Complete pipeline shutdown'));
+    // }
 }
 
 // Initialize and start the pipeline

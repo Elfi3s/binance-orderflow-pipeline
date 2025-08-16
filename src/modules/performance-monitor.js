@@ -31,4 +31,10 @@ export class PerformanceMonitor {
       tradesPerSecond: this.metrics.tradesProcessed / uptimeSeconds
     };
   }
+
+  updateAverageProcessingTime(processingTimeMs) {
+  const currentAvg = this.metrics.averageProcessingTime;
+  const count = this.metrics.tradesProcessed;
+  this.metrics.averageProcessingTime = ((currentAvg * (count - 1)) + processingTimeMs) / count;
+}
 }

@@ -1,4 +1,5 @@
 // src/modules/iceberg-detector.js - NEW FILE
+import { config } from '../../config.js';
 export class IcebergDetector {
   constructor() {
     this.priceVolumeTracker = new Map(); // price -> {volume, orderCount, timeWindow}
