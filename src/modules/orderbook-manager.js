@@ -14,7 +14,13 @@ export class OrderBookManager {
     this.pendingUpdates = [];
     this.symbol = config.symbol;
   }
-
+initializeEmpty() {
+  this.orderBook.bids.clear();
+  this.orderBook.asks.clear();
+  this.orderBook.lastUpdateId = 0;
+  this.orderBook.isInitialized = true;
+  console.log(chalk.green('✅ Empty order book initialized for file-based data'));
+}
   async initialize() {
     console.log(chalk.yellow('📋 Initializing order book snapshot...'));
     
@@ -61,37 +67,68 @@ export class OrderBookManager {
     }
   }
 
-  handleDepthUpdate(depthData) {
-    if (!this.orderBook.isInitialized) {
-      // Store updates until we're initialized
-      this.pendingUpdates.push(depthData);
-      if (this.pendingUpdates.length > 100) {
-        // Prevent memory leak - restart initialization
-        this.initialize();
-      }
-      return false;
-    }
-
-    // Check if this update is in sequence
-    if (depthData.U <= this.orderBook.lastUpdateId) {
-      // Old update, ignore
-      return false;
-    }
-
-    if (depthData.u < this.orderBook.lastUpdateId + 1) {
-      // Gap detected - need to resync
-      console.log(chalk.red(`⚠️ Order book sync gap detected. Expected: ${this.orderBook.lastUpdateId + 1}, Got: ${depthData.u}`));
-      this.orderBook.isInitialized = false;
+handleDepthUpdate(depthData) {
+  if (!this.orderBook.isInitialized) {
+    this.pendingUpdates.push(depthData);
+    if (this.pendingUpdates.length > 100) {
       this.initialize();
-      return false;
     }
-
-    // Apply the update
-    this.applyDepthUpdate(depthData);
-    this.orderBook.lastUpdateId = depthData.u;
-    return true;
+    return false;
   }
 
+  // For file-based data, be much more permissive with update sequence
+  if (depthData.U && depthData.u) {
+    // If we have sequence numbers, check basic validity
+    if (depthData.U > depthData.u) {
+      console.log(chalk.yellow('⚠️ Invalid depth data: U > u, skipping'));
+      return false;
+    }
+    
+    // Skip very old updates only if we have a much newer update ID
+    if (this.orderBook.lastUpdateId > 0 && depthData.u < this.orderBook.lastUpdateId - 1000) {
+      return false; // Skip very old data
+    }
+  }
+
+  try {
+    // Apply the update
+    this.applyDepthUpdate(depthData);
+    
+    // Update sequence ID
+    this.orderBook.lastUpdateId = Math.max(
+      this.orderBook.lastUpdateId, 
+      depthData.u || this.orderBook.lastUpdateId + 1
+    );
+
+    // Validate order book after update
+    if (!this.validateOrderBook()) {
+      console.log(chalk.red('❌ Order book validation failed after update - reinitializing'));
+      this.initializeEmpty();
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.error(chalk.red('❌ Error applying depth update:'), error);
+    return false;
+  }
+}
+
+validateOrderBook() {
+  if (this.orderBook.bids.size === 0 || this.orderBook.asks.size === 0) {
+    return true; // Empty is valid (just starting)
+  }
+
+  const bestBid = Math.max(...this.orderBook.bids.keys());
+  const bestAsk = Math.min(...this.orderBook.asks.keys());
+  
+  if (bestBid >= bestAsk) {
+    console.log(chalk.red(`❌ Invalid order book: bestBid (${bestBid}) >= bestAsk (${bestAsk})`));
+    return false;
+  }
+  
+  return true;
+}
   applyDepthUpdate(depthData) {
     // Update bids
     depthData.b.forEach(([price, quantity]) => {

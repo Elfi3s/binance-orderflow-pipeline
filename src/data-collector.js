@@ -197,43 +197,53 @@ flushDataToDisk() {
     this.connections.set('trade', ws);
   }
 
-  connectDepthStream() {
-    const depthUrl = `${config.wsUrls.futures}/ws/${this.symbol}@depth@100ms`;
-    const ws = new WebSocket(depthUrl);
+connectDepthStream() {
+  const depthUrl = `${config.wsUrls.futures}/ws/${this.symbol}@depth@100ms`;
+  const ws = new WebSocket(depthUrl);
 
-    ws.on('open', () => {
-      console.log(chalk.green('✅ Depth collection stream connected'));
-    });
+  ws.on('open', () => {
+    console.log(chalk.green('✅ Depth collection stream connected'));
+  });
 
-    ws.on('message', (data) => {
-      try {
-        const message = JSON.parse(data.toString());
-        this.orderBookManager.handleDepthUpdate(message);
-        
-        // Store top 5 levels only to save space
-        const topLevels = this.orderBookManager.getTopLevels(5);
-        if (topLevels) {
-          this.dataBuffer.depth.push({
-            timestamp: Date.now(),
-            data: {
-              bids: topLevels.bids,
-              asks: topLevels.asks,
-              spread: topLevels.asks.price - topLevels.bids.price
+  ws.on('message', (data) => {
+    try {
+      const message = JSON.parse(data.toString());
+      this.orderBookManager.handleDepthUpdate(message);
+      
+      // Store top 5 levels only to save space
+      const topLevels = this.orderBookManager.getTopLevels(5);
+      if (topLevels && topLevels.bids && topLevels.asks) {
+        this.dataBuffer.depth.push({
+          timestamp: Date.now(),
+          data: {
+            bids: topLevels.bids,
+            asks: topLevels.asks,
+            spread: topLevels.asks[0].price - topLevels.bids[0].price, // FIXED: was missing 
+            // ADD: Store raw message for proper replay
+            rawMessage: {
+              e: message.e,
+              E: message.E,
+              s: message.s,
+              U: message.U,
+              u: message.u,
+              b: message.b.slice(0, 10), // Store first 10 bid updates
+              a: message.a.slice(0, 10)  // Store first 10 ask updates
             }
-          });
-        }
-        
-        // Force flush if buffer too large
-        if (this.dataBuffer.depth.length > this.maxBufferSize) {
-          this.flushDataToDisk();
-        }
-      } catch (error) {
-        console.error(chalk.red('❌ Depth collection error:'), error);
+          }
+        });
       }
-    });
+      
+      // Force flush if buffer too large
+      if (this.dataBuffer.depth.length > this.maxBufferSize) {
+        this.flushDataToDisk();
+      }
+    } catch (error) {
+      console.error(chalk.red('❌ Depth collection error:'), error);
+    }
+  });
 
-    this.connections.set('depth', ws);
-  }
+  this.connections.set('depth', ws);
+}
 
   close() {
     console.log(chalk.yellow('🔌 Shutting down data collector...'));

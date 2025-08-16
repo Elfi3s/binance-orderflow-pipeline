@@ -36,6 +36,9 @@ import { TimeframeStorageManager } from './modules/timeframe-storage-manager.js'
 import { LiveDataReader } from './modules/live-data-reader.js';
 import { TimezoneFormatter } from './utils/timezone-formatter.js';
 import { BinanceVerification } from './modules/binance-verification.js';
+import { MarketSweepDetector } from './modules/market-sweep-detector.js';
+import { VWAPDeviationAnalyzer } from './modules/vwap-deviation-analyzer.js';
+import { OrderStackingDetector } from './modules/order-stacking-detector.js';
 class BinanceOrderFlowPipeline {
     constructor() {
 
@@ -45,7 +48,9 @@ class BinanceOrderFlowPipeline {
         //this.connections = new Map();
 
         // Initialize all modules
+        //this.orderBookManager = new OrderBookManager();
         this.orderBookManager = new OrderBookManager();
+console.log('🔍 OrderBookManager instance created:', this.orderBookManager.constructor.name, Date.now());
         this.tradeClassifier = new TradeClassifier(this.orderBookManager);
         this.barAggregator = new BarAggregator();
         this.rsiCalculator = new RSICalculator(config.rsiPeriod);
@@ -71,7 +76,9 @@ class BinanceOrderFlowPipeline {
 
         this.spreadAnalyzer = new SpreadAnalyzer();
 
-
+this.marketSweepDetector = new MarketSweepDetector();
+this.vwapDeviationAnalyzer = new VWAPDeviationAnalyzer();
+this.orderStackingDetector = new OrderStackingDetector();
 
         this.orderFlowMomentum = new OrderFlowMomentumAnalyzer();
         this.domPressureAnalyzer = new DOMPressureAnalyzer();
@@ -107,9 +114,32 @@ class BinanceOrderFlowPipeline {
 
     async start() {
         try {
-            // Initialize order book first
-            console.log(chalk.yellow('⚙️ Initializing order book...'));
-            await this.orderBookManager.initialize();
+    console.log(chalk.yellow('⚙️ Starting live data reader first...'));
+    
+    // Start reading data files to check if we have data
+    let hasLiveData = false;
+    
+    try {
+      const testPath = path.resolve(`./data/live/${config.interval}`);
+      if (fs.existsSync(testPath)) {
+        const files = fs.readdirSync(testPath).filter(f => f.startsWith(`live_data_${config.interval}_`));
+        hasLiveData = files.length > 0;
+      }
+    } catch (e) {
+      hasLiveData = false;
+    }
+    
+    if (hasLiveData) {
+      console.log(chalk.green('✅ Live data files found - skipping REST API order book initialization'));
+      console.log(chalk.yellow('📖 Order book will be built from live data files'));
+      
+      // Mark as initialized but don't load REST snapshot
+      this.orderBookManager.orderBook.isInitialized = true;
+      this.orderBookManager.orderBook.lastUpdateId = 0; // Start from 0
+    } else {
+      console.log(chalk.yellow('⚙️ No live data found - initializing order book from REST API...'));
+      await this.orderBookManager.initialize();
+    }
 
 
             // Initialize RSI with historical data
@@ -141,8 +171,9 @@ class BinanceOrderFlowPipeline {
         }
     }
 
+// src/app.js - ADD this method to show intrabar RSI estimation:
+
 startStatusUpdates() {
-  // Show summary every 30 seconds
   setInterval(() => {
     const currentBar = this.barAggregator.getCurrentBar();
     const obStats = this.orderBookManager.getStats();
@@ -150,8 +181,8 @@ startStatusUpdates() {
     const rsiStats = this.rsiCalculator.getStats();
 
     console.log(chalk.magenta('════════════════════════════════════════'));
-       // ADD TIMESTAMP HERE
     console.log(chalk.blue(`📊 COMPLETE PIPELINE STATUS - ${TimezoneFormatter.getCurrentTime()}`));
+    
     const cvdStats = this.cvdAnalyzer.getSnapshotStats();
     const whaleLast = this.whaleDetector.getLast();
     console.log(chalk.green('📈 Flow Stats:'), {
@@ -178,15 +209,28 @@ startStatusUpdates() {
       sellTrades: recentTrades.filter(t => t.side === 'SELL').length
     });
 
+    // ENHANCED RSI DISPLAY with intrabar info
+    const intrabarPrice = currentBar?.ohlc?.close || 0;
     console.log(chalk.yellow(`📈 RSI Analysis (${config.interval.toUpperCase()}):`), {
       rsi: rsiStats.rsi,
       signal: rsiStats.signal,
       trend: rsiStats.trend,
-      dataPoints: rsiStats.dataPoints
+      dataPoints: rsiStats.dataPoints,
+      intrabarPrice: intrabarPrice.toFixed(2), // Show current price
+      note: "RSI updates only on bar close (every 15min)"
     });
 
     // Check current imbalances
+     // DEBUG: Get DOM data and imbalances with timestamps
+    console.log('🔍 STATUS DEBUG - Getting DOM data for imbalances...');
     const domData = this.orderBookManager.getTopLevels(20);
+    console.log('🔍 STATUS DEBUG - DOM data retrieved:', {
+      bidsCount: domData?.bids?.length || 0,
+      asksCount: domData?.asks?.length || 0,
+      topBid: domData?.bids?.[0]?.price || 'none',
+      topAsk: domData?.asks?.[0]?.price || 'none'
+    });
+
     const imbalances = this.imbalanceDetector.detectImbalances(null, domData);
     const imbalanceStats = this.imbalanceDetector.getImbalanceStats();
 
@@ -194,7 +238,9 @@ startStatusUpdates() {
       total: imbalances.length,
       buy: imbalances.filter(i => i.direction === 'BUY').length,
       sell: imbalances.filter(i => i.direction === 'SELL').length,
-      avgStrength: imbalanceStats.avgStrength
+      avgStrength: imbalanceStats.avgStrength,
+      lastUpdate: new Date().toISOString(), // Show when this was calculated
+      calculatedAt: 'status-time' // Debug marker
     });
 
     // Get live intrabar VWAP metrics
@@ -207,25 +253,38 @@ startStatusUpdates() {
       totalVol: liveVP.totalVolume
     });
     
+    // ENHANCED ORDER BOOK DISPLAY
     console.log(chalk.gray('📖 Order Book:'), {
       bidLevels: obStats.bidLevels,
       askLevels: obStats.askLevels,
       bestBid: obStats.bid?.toFixed(2),
       bestAsk: obStats.ask?.toFixed(2),
-      spread: obStats.spread?.toFixed(4)
+      spread: obStats.spread?.toFixed(4),
+      lastUpdateId: obStats.lastUpdateId, // Show update ID for debugging
+      isInitialized: obStats.isInitialized,
+      statusTime: new Date().toISOString() // Debug marker
     });
 
-    // ADD ONLY REAL-TIME SIGNAL SUMMARY (NO SPAMMY DETAILS)
     const activeIcebergs = this.icebergDetector.getActiveIcebergs().length;
     if (activeIcebergs > 0) {
       console.log(chalk.blue('🎯 Active Signals:'), {
         icebergs: activeIcebergs
       });
     }
-    
-    console.log(chalk.magenta('════════════════════════════════════════'));
-  }, 30000); // Every 30 seconds
+    const sweepStats = this.marketSweepDetector.getSweepStats();
+const stackStats = this.orderStackingDetector.getStackingStats();
+
+if (sweepStats || stackStats) {
+  const enhancedSignals = {};
+  if (sweepStats) enhancedSignals.sweeps = `${sweepStats.bullish}B/${sweepStats.bearish}S`;
+  if (stackStats) enhancedSignals.stacking = `${stackStats.netStacking > 0 ? '+' : ''}${stackStats.netStacking}`;
+  
+  console.log(chalk.blue('🎯 Enhanced Signals:'), enhancedSignals);
 }
+    console.log(chalk.magenta('════════════════════════════════════════'));
+  }, 30000);
+}
+
 
     // async connectWebSockets() {
     //     this.connectKlineStream();
@@ -496,7 +555,22 @@ handleTradeData(message) {
 if (volumeAnomaly && volumeAnomaly.type === 'BLOCK_TRADE_CLUSTER') {
     console.log(chalk.magenta(`📊 Block Trade Cluster: ${volumeAnomaly.signal} - ${volumeAnomaly.tradeVolume.toFixed(0)} ETH - ${TimezoneFormatter.getCurrentTime()}`));
   }
+const sweeps = this.marketSweepDetector.onTrade(classifiedTrade);
+if (sweeps) {
+  sweeps.forEach(sweep => {
+    console.log(chalk.blue(`🌊 Market Sweep: ${sweep.signal} ${sweep.type} - ${sweep.volume.toFixed(0)} ETH at ${sweep.price}`));
+  });
+}
 
+// VWAP deviation analysis  
+const vwapSignals = this.vwapDeviationAnalyzer.onTrade(classifiedTrade);
+if (vwapSignals && vwapSignals.signals.length > 0) {
+  vwapSignals.signals.forEach(signal => {
+    if (signal.level >= 1.5) { // Only show significant deviations
+      console.log(chalk.yellow(`📏 VWAP ${signal.type}: ${signal.signal} - Price: ${signal.price.toFixed(2)}, VWAP: ${signal.vwap.toFixed(2)}`));
+    }
+  });
+}
         // NEW: Real-time analyzers
         const momentumSignals = this.orderFlowMomentum.onTrade(classifiedTrade);
         const volumeFlowSignals = this.volumeFlowAnalyzer.onTrade(classifiedTrade);
@@ -539,47 +613,52 @@ if (volumeAnomaly && volumeAnomaly.type === 'BLOCK_TRADE_CLUSTER') {
     }
 
 handleDepthData(depthData) {
-  // ALWAYS try to update the order book manager first
-  let success = false;
+  let updated = false;
   
-  if (depthData.e === 'depthUpdate' || depthData.b || depthData.a) {
-    // This is a proper Binance depth message format
-    success = this.orderBookManager.handleDepthUpdate(depthData);
-  } else if (depthData.bids && depthData.asks) {
-    // This is our simplified format, convert it
-    const binanceFormat = {
-      e: 'depthUpdate',
-      E: Date.now(),
-      s: config.symbol,
-      U: Date.now() - 1000,
-      u: Date.now(),
-      b: depthData.bids.map(bid => [bid.price.toString(), bid.quantity.toString()]),
-      a: depthData.asks.map(ask => [ask.price.toString(), ask.quantity.toString()])
-    };
-    success = this.orderBookManager.handleDepthUpdate(binanceFormat);
-  }
-
-  if (success) {
-    // Only run analysis if order book was updated
-    const topLevels = this.orderBookManager.getTopLevels(10);
-    
-    if (topLevels) {
-      // Enhanced DOM analysis with STRICT cooldowns
-      const domPatterns = this.enhancedDOMAnalyzer.onDepthUpdate(depthData, this.orderBookManager);
-      if (domPatterns) {
-        domPatterns.forEach(pattern => {
-          console.log(chalk.magenta(`📚 ${pattern.type.replace('_', ' ')}: ${pattern.signal} (${(pattern.strength * 100).toFixed(0)}%)`));
-        });
-      }
-
-      // DOM Pressure Analysis
-      const domPressureSignals = this.domPressureAnalyzer.onDepthUpdate(topLevels);
-      if (domPressureSignals) {
-        domPressureSignals.forEach(signal => {
-          console.log(chalk.red(`🏗️  ${signal.type.replace('_', ' ')}: ${signal.signal} (${(signal.strength * 100).toFixed(0)}%)`));
-        });
-      }
+  try {
+    if (depthData.e === 'depthUpdate' || (depthData.b && depthData.a)) {
+      // Proper Binance format
+      updated = this.orderBookManager.handleDepthUpdate(depthData);
+    } else if (depthData.bids && depthData.asks) {
+      // Our file format - convert to Binance format
+      const binanceFormat = {
+        e: 'depthUpdate',
+        E: Date.now(),
+        s: config.symbol,
+        U: this.orderBookManager.orderBook.lastUpdateId + 1,
+        u: this.orderBookManager.orderBook.lastUpdateId + 2,
+        b: depthData.bids.map(bid => [bid.price.toString(), bid.quantity.toString()]),
+        a: depthData.asks.map(ask => [ask.price.toString(), ask.quantity.toString()])
+      };
+      updated = this.orderBookManager.handleDepthUpdate(binanceFormat);
     }
+
+    if (updated) {
+      // Only run analysis occasionally to reduce spam
+      const topLevels = this.orderBookManager.getTopLevels(10);
+      
+      if (topLevels && Math.random() < 0.05) { // 5% chance - reduce spam
+        const domPatterns = this.enhancedDOMAnalyzer.onDepthUpdate(depthData, this.orderBookManager);
+        if (domPatterns) {
+          domPatterns.forEach(pattern => {
+            console.log(chalk.magenta(`📚 ${pattern.type.replace('_', ' ')}: ${pattern.signal} (${(pattern.strength * 100).toFixed(0)}%)`));
+          });
+        }
+      }
+
+      // Order stacking detection (run less frequently)
+if (Math.random() < 0.02) { // 2% chance
+  const stacks = this.orderStackingDetector.onDepthUpdate(this.orderBookManager);
+  if (stacks) {
+    stacks.forEach(stack => {
+      console.log(chalk.green(`📚 ${stack.type}: ${stack.totalVolume.toFixed(0)} ETH stacked at ~${stack.avgPrice.toFixed(2)} - ${stack.signal}`));
+    });
+  }
+}
+    }
+    
+  } catch (error) {
+    console.error(chalk.red('❌ Depth data processing error:'), error);
   }
 }
 
@@ -691,7 +770,7 @@ handleDepthData(depthData) {
                 confidence: `${checklistSummary.confidence}%`,
                 rsi: this.rsiCalculator.getRSI(),
                 delta: finalizedBar.totalDelta.toFixed(0),
-                patterns: deltaPatterns.summary.totalPatterns
+                patterns: deltaPatterns?.summary?.totalPatterns || 0
             });
 
         } catch (err) {

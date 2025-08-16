@@ -109,22 +109,28 @@ processDataFile(fileInfo, onTradeData, onKlineData, onDepthData) {
       }
     }
 
-    // FIX: Process depth updates with CORRECT FORMAT
-    if (data.depth && data.depth.length > 0) {
-      for (const depth of data.depth) {
-        // Create PROPER Binance depth format that OrderBookManager expects
-        const binanceDepthMessage = {
-          e: 'depthUpdate',
-          E: depth.timestamp,
-          s: data.symbol,
-          U: Date.now() - 1000,  // First update ID
-          u: Date.now(),         // Final update ID  
-          b: depth.data.bids.map(bid => [bid.price.toString(), bid.quantity.toString()]),
-          a: depth.data.asks.map(ask => [ask.price.toString(), ask.quantity.toString()])
-        };
-        onDepthData(binanceDepthMessage);
-      }
+if (data.depth && data.depth.length > 0) {
+  for (const depth of data.depth) {
+    // Prefer raw message if available
+    if (depth.data.rawMessage) {
+      //console.log('🔍 Using raw depth message for proper replay');
+      onDepthData(depth.data.rawMessage);
+    } else {
+      // Fallback to converted format
+      console.log('🔍 Using converted depth format');
+      const binanceDepthMessage = {
+        e: 'depthUpdate',
+        E: depth.timestamp,
+        s: data.symbol,
+        U: Date.now() - 1000,
+        u: Date.now(),
+        b: depth.data.bids.map(bid => [bid.price.toString(), bid.quantity.toString()]),
+        a: depth.data.asks.map(ask => [ask.price.toString(), ask.quantity.toString()])
+      };
+      onDepthData(binanceDepthMessage);
     }
+  }
+}
 
     this.lastProcessedTimestamp = fileInfo.timestamp;
     
