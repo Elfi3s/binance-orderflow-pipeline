@@ -1,32 +1,38 @@
-// src/modules/enhanced-dom-analyzer.js - NEW FILE
+// src/modules/enhanced-dom-analyzer.js - COMPLETELY REPLACE with cooldown system:
+
 export class EnhancedDOMAnalyzer {
   constructor() {
     this.domHistory = [];
     this.maxHistory = 100;
-    this.spoofingThreshold = 1000; // ETH threshold for spoof detection
-    this.lastAnalysis = 0;
+    this.spoofingThreshold = 1000;
+    
+    // ADD AGGRESSIVE COOLDOWN SYSTEM
+    this.lastAnalysisTime = 0;
+    this.analysisCooldown = 10000; // 10 seconds between analysis
+    this.lastSignalType = null;
+    this.lastSignalTime = 0;
+    this.signalCooldown = 15000; // 15 seconds between same signal types
   }
 
   onDepthUpdate(depthData, orderBookManager) {
-    const timestamp = Date.now();
-
-  // ADD COOLDOWN - Only analyze every 5 seconds
-  if (this.lastAnalysis && timestamp - this.lastAnalysis < 5000) {
-    return null;
-  }
-  this.lastAnalysis = timestamp;
+    const now = Date.now();
+    
+    // AGGRESSIVE COOLDOWN - Only analyze every 10 seconds
+    if (now - this.lastAnalysisTime < this.analysisCooldown) {
+      return null;
+    }
+    this.lastAnalysisTime = now;
 
     const topLevels = orderBookManager.getTopLevels(20);
-    
     if (!topLevels) return null;
 
     const domSnapshot = {
-      timestamp: timestamp,
+      timestamp: now,
       bids: topLevels.bids.slice(0, 10),
       asks: topLevels.asks.slice(0, 10),
       totalBidVolume: topLevels.bids.reduce((sum, level) => sum + level.quantity, 0),
       totalAskVolume: topLevels.asks.reduce((sum, level) => sum + level.quantity, 0),
-      spread: topLevels.asks.price - topLevels.bids.price
+      spread: topLevels.asks[0].price - topLevels.bids[0].price
     };
 
     this.domHistory.push(domSnapshot);
@@ -34,144 +40,50 @@ export class EnhancedDOMAnalyzer {
       this.domHistory.shift();
     }
 
-    return this.analyzeDOMPatterns(domSnapshot);
+    return this.analyzeDOMPatterns(domSnapshot, now);
   }
 
-  analyzeDOMPatterns(currentDOM) {
+  analyzeDOMPatterns(currentDOM, now) {
     const patterns = [];
 
-    // 1. Spoof Detection
-    const spoofing = this.detectSpoofing(currentDOM);
-    if (spoofing) patterns.push(spoofing);
-
-    // 2. Hidden Liquidity Detection
-    const hiddenLiquidity = this.detectHiddenLiquidity();
-    if (hiddenLiquidity) patterns.push(hiddenLiquidity);
-
-    // 3. Liquidity Imbalance
-    const imbalance = this.detectLiquidityImbalance(currentDOM);
+    // Only analyze liquidity imbalance - remove other spammy analyses
+    const imbalance = this.detectLiquidityImbalance(currentDOM, now);
     if (imbalance) patterns.push(imbalance);
 
     return patterns.length > 0 ? patterns : null;
   }
 
-  detectSpoofing(currentDOM) {
-    if (this.domHistory.length < 5) return null;
-
-    const recent = this.domHistory.slice(-5);
-    const current = currentDOM;
-
-    // Check for large orders that appear and disappear quickly
-    for (const level of current.bids) {
-      if (level.quantity > this.spoofingThreshold) {
-        const wasPresent = recent.some(dom => 
-          dom.bids.some(bid => 
-            Math.abs(bid.price - level.price) < 0.01 && 
-            bid.quantity > this.spoofingThreshold * 0.8
-          )
-        );
-
-        if (!wasPresent) {
-          return {
-            type: 'POTENTIAL_SPOOF_ORDER',
-            signal: 'BEARISH', // Large bid might be fake
-            side: 'BID',
-            price: level.price,
-            volume: level.quantity,
-            strength: Math.min(1.0, level.quantity / (this.spoofingThreshold * 3))
-          };
-        }
-      }
+  detectLiquidityImbalance(currentDOM, now) {
+    const ratio = currentDOM.totalBidVolume / currentDOM.totalAskVolume;
+    
+    // MUCH STRICTER THRESHOLDS AND COOLDOWNS
+    let signalType = null;
+    
+    if (ratio > 10.0 && currentDOM.totalBidVolume > 2000) { // MUCH HIGHER thresholds
+      signalType = 'EXTREME_BID_LIQUIDITY';
+    } else if (ratio < 0.1 && currentDOM.totalAskVolume > 2000) {
+      signalType = 'EXTREME_ASK_LIQUIDITY';  
     }
-
-    for (const level of current.asks) {
-      if (level.quantity > this.spoofingThreshold) {
-        const wasPresent = recent.some(dom => 
-          dom.asks.some(ask => 
-            Math.abs(ask.price - level.price) < 0.01 && 
-            ask.quantity > this.spoofingThreshold * 0.8
-          )
-        );
-
-        if (!wasPresent) {
-          return {
-            type: 'POTENTIAL_SPOOF_ORDER',
-            signal: 'BULLISH', // Large ask might be fake
-            side: 'ASK',
-            price: level.price,
-            volume: level.quantity,
-            strength: Math.min(1.0, level.quantity / (this.spoofingThreshold * 3))
-          };
-        }
-      }
-    }
-
-    return null;
-  }
-
-  detectHiddenLiquidity() {
-    if (this.domHistory.length < 10) return null;
-
-    const recent = this.domHistory.slice(-10);
-    const current = recent[recent.length - 1];
-    const previous = recent[recent.length - 2];
-
-    // Check for systematic order placement patterns
-    const bidVolumeIncrease = current.totalBidVolume > previous.totalBidVolume * 1.3;
-    const askVolumeIncrease = current.totalAskVolume > previous.totalAskVolume * 1.3;
-
-    if (bidVolumeIncrease && !askVolumeIncrease) {
+    
+    // Only signal if significant AND not recently signaled
+    if (signalType && 
+        (this.lastSignalType !== signalType || now - this.lastSignalTime > this.signalCooldown)) {
+      
+      this.lastSignalType = signalType;
+      this.lastSignalTime = now;
+      
       return {
-        type: 'HIDDEN_LIQUIDITY_ACCUMULATION',
-        signal: 'BULLISH',
-        side: 'BID',
-        volumeIncrease: current.totalBidVolume - previous.totalBidVolume,
-        strength: Math.min(1.0, (current.totalBidVolume / previous.totalBidVolume - 1) * 2)
-      };
-    }
-
-    if (askVolumeIncrease && !bidVolumeIncrease) {
-      return {
-        type: 'HIDDEN_LIQUIDITY_ACCUMULATION',
-        signal: 'BEARISH',
-        side: 'ASK',
-        volumeIncrease: current.totalAskVolume - previous.totalAskVolume,
-        strength: Math.min(1.0, (current.totalAskVolume / previous.totalAskVolume - 1) * 2)
+        type: signalType,
+        signal: signalType === 'EXTREME_BID_LIQUIDITY' ? 'BULLISH' : 'BEARISH',
+        ratio: ratio,
+        bidVolume: currentDOM.totalBidVolume,
+        askVolume: currentDOM.totalAskVolume,
+        strength: Math.min(1.0, ratio > 10 ? (ratio - 10) / 20 : (0.1 - ratio) / 0.09)
       };
     }
 
     return null;
   }
-
-detectLiquidityImbalance(currentDOM) {
-  const ratio = currentDOM.totalBidVolume / currentDOM.totalAskVolume;
-  
-  // MUCH HIGHER THRESHOLDS AND ADD COOLDOWN
-  if (ratio > 5.0) { // Changed from 3.0 to 5.0
-    return {
-      type: 'EXTREME_BID_LIQUIDITY',
-      signal: 'BULLISH',
-      ratio: ratio,
-      bidVolume: currentDOM.totalBidVolume,
-      askVolume: currentDOM.totalAskVolume,
-      strength: Math.min(1.0, (ratio - 1) / 15) // Reduced sensitivity
-    };
-  }
-
-  if (ratio < 0.15) { // Changed from 0.33 to 0.15
-    return {
-      type: 'EXTREME_ASK_LIQUIDITY',
-      signal: 'BEARISH',
-      ratio: ratio,
-      bidVolume: currentDOM.totalBidVolume,
-      askVolume: currentDOM.totalAskVolume,
-      strength: Math.min(1.0, (1 - ratio) / 0.85) // Reduced sensitivity
-    };
-  }
-
-  return null;
-}
-
 
   getDOMStats() {
     if (this.domHistory.length === 0) return null;

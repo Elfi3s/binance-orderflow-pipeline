@@ -62,10 +62,18 @@ export class TradeClassifier {
     };
   }
 
-  getRecentTrades(timeWindow = 60000) { // Last minute by default
-    const cutoff = Date.now() - timeWindow;
-    return this.classifiedTrades.filter(trade => trade.time >= cutoff);
+getRecentTrades(timeWindow = 60000) { // Last minute by default
+  const cutoff = Date.now() - timeWindow;
+  
+  // Check if we have separate recentTrades array (from file reading)
+  if (this.recentTrades && this.recentTrades.length > 0) {
+    return this.recentTrades.filter(trade => (trade.time || trade.timestamp) >= cutoff);
   }
+  
+  // Otherwise use main classifiedTrades array
+  return this.classifiedTrades.filter(trade => trade.time >= cutoff);
+}
+
 
   clearOldTrades(maxAge = 3600000) { // Keep 1 hour of trades
     const cutoff = Date.now() - maxAge;
@@ -78,7 +86,7 @@ export class TradeClassifier {
     }
   }
 
-  addToRecentTrades(trade) {
+addToRecentTrades(trade) {
   if (!this.recentTrades) {
     this.recentTrades = [];
   }
@@ -91,5 +99,12 @@ export class TradeClassifier {
   // Keep only recent trades (last 5 minutes)
   const cutoff = Date.now() - (5 * 60 * 1000);
   this.recentTrades = this.recentTrades.filter(t => (t.timestamp || t.time) > cutoff);
+  
+  // ALSO add to main classifiedTrades for consistency
+  this.classifiedTrades.push({
+    ...trade,
+    timestamp: trade.time || Date.now()
+  });
 }
+
 }

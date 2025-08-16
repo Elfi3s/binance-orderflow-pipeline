@@ -1,38 +1,38 @@
 // src/modules/dom-pressure-analyzer.js - REPLACE ENTIRE FILE
 export class DOMPressureAnalyzer {
-  constructor() {
-    this.domHistory = [];
-    this.pressureLevels = new Map(); // price -> pressure data
-    this.maxHistory = 200;
-    this.pressureThreshold = 500; // HIGHER THRESHOLD - ETH volume for significant pressure
-    
-    // ADD COOLDOWN SYSTEM
-    this.lastSignalTime = 0;
-    this.signalCooldown = 15000; // 15 seconds cooldown
-    this.lastSignalType = null;
+constructor() {
+  this.domHistory = [];
+  this.pressureLevels = new Map();
+  this.maxHistory = 200;
+  this.pressureThreshold = 1000; // Higher threshold
+  
+  // ADD COOLDOWN SYSTEM
+  this.lastSignalTime = 0;
+  this.signalCooldown = 20000; // 20 seconds cooldown
+  this.lastSignalType = null;
+}
+
+onDepthUpdate(domData) {
+  const now = Date.now();
+  
+  // AGGRESSIVE COOLDOWN CHECK
+  if (now - this.lastSignalTime < this.signalCooldown) {
+    return null;
+  }
+  
+  this.domHistory.push({
+    timestamp: now,
+    bids: domData.bids || [],
+    asks: domData.asks || [],
+    spread: domData.spread || 0
+  });
+
+  if (this.domHistory.length > this.maxHistory) {
+    this.domHistory.shift();
   }
 
-  onDepthUpdate(domData) {
-    const now = Date.now();
-    
-    // COOLDOWN CHECK - Don't analyze if in cooldown
-    if (now - this.lastSignalTime < this.signalCooldown) {
-      return null;
-    }
-    
-    this.domHistory.push({
-      timestamp: now,
-      bids: domData.bids || [],
-      asks: domData.asks || [],
-      spread: domData.spread || 0
-    });
-
-    if (this.domHistory.length > this.maxHistory) {
-      this.domHistory.shift();
-    }
-
-    return this.analyzePressure(domData, now);
-  }
+  return this.analyzePressure(domData, now);
+}
 
   analyzePressure(current, now) {
     if (this.domHistory.length < 20) return null;

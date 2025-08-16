@@ -218,7 +218,7 @@ flushDataToDisk() {
             data: {
               bids: topLevels.bids,
               asks: topLevels.asks,
-              spread: topLevels.asks[0].price - topLevels.bids.price
+              spread: topLevels.asks.price - topLevels.bids.price
             }
           });
         }

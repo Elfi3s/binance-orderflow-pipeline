@@ -109,22 +109,23 @@ processDataFile(fileInfo, onTradeData, onKlineData, onDepthData) {
       }
     }
 
-    // FIX: Process depth updates to update order book manager
+    // FIX: Process depth updates with CORRECT FORMAT
     if (data.depth && data.depth.length > 0) {
       for (const depth of data.depth) {
-        // Call onDepthData with the raw depth data structure that order book manager expects
-        const mockDepthMessage = {
-          bids: depth.data.bids.map(bid => [bid.price.toString(), bid.quantity.toString()]),
-          asks: depth.data.asks.map(ask => [ask.price.toString(), ask.quantity.toString()]),
-          u: Date.now(), // Update ID
+        // Create PROPER Binance depth format that OrderBookManager expects
+        const binanceDepthMessage = {
+          e: 'depthUpdate',
+          E: depth.timestamp,
           s: data.symbol,
-          E: depth.timestamp
+          U: Date.now() - 1000,  // First update ID
+          u: Date.now(),         // Final update ID  
+          b: depth.data.bids.map(bid => [bid.price.toString(), bid.quantity.toString()]),
+          a: depth.data.asks.map(ask => [ask.price.toString(), ask.quantity.toString()])
         };
-        onDepthData(mockDepthMessage);
+        onDepthData(binanceDepthMessage);
       }
     }
 
-    // Update last processed timestamp
     this.lastProcessedTimestamp = fileInfo.timestamp;
     
   } catch (error) {

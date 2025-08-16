@@ -538,38 +538,50 @@ if (volumeAnomaly && volumeAnomaly.type === 'BLOCK_TRADE_CLUSTER') {
         }
     }
 
-    handleDepthData(depthData) {
-        // Handle both direct data and message formats
-        let processedData;
-        if (depthData.bids && depthData.asks) {
-            // Direct depth data from reader
-            processedData = depthData;
-        } else {
-            // Original WebSocket message format
-            this.orderBookManager.handleDepthUpdate(depthData);
-            const topLevels = this.orderBookManager.getTopLevels(10);
-            processedData = topLevels;
-        }
+handleDepthData(depthData) {
+  // ALWAYS try to update the order book manager first
+  let success = false;
+  
+  if (depthData.e === 'depthUpdate' || depthData.b || depthData.a) {
+    // This is a proper Binance depth message format
+    success = this.orderBookManager.handleDepthUpdate(depthData);
+  } else if (depthData.bids && depthData.asks) {
+    // This is our simplified format, convert it
+    const binanceFormat = {
+      e: 'depthUpdate',
+      E: Date.now(),
+      s: config.symbol,
+      U: Date.now() - 1000,
+      u: Date.now(),
+      b: depthData.bids.map(bid => [bid.price.toString(), bid.quantity.toString()]),
+      a: depthData.asks.map(ask => [ask.price.toString(), ask.quantity.toString()])
+    };
+    success = this.orderBookManager.handleDepthUpdate(binanceFormat);
+  }
 
-        if (processedData) {
-            // Enhanced DOM analysis - LESS FREQUENT LOGGING
-            const domPatterns = this.enhancedDOMAnalyzer.onDepthUpdate(depthData, this.orderBookManager);
-            if (domPatterns) {
-                // Only log if strength > 0.7 to reduce spam
-                domPatterns.filter(pattern => pattern.strength > 0.7).forEach(pattern => {
-                    console.log(chalk.magenta(`📚 ${pattern.type.replace('_', ' ')}: ${pattern.signal} (${(pattern.strength * 100).toFixed(0)}%)`));
-                });
-            }
+  if (success) {
+    // Only run analysis if order book was updated
+    const topLevels = this.orderBookManager.getTopLevels(10);
+    
+    if (topLevels) {
+      // Enhanced DOM analysis with STRICT cooldowns
+      const domPatterns = this.enhancedDOMAnalyzer.onDepthUpdate(depthData, this.orderBookManager);
+      if (domPatterns) {
+        domPatterns.forEach(pattern => {
+          console.log(chalk.magenta(`📚 ${pattern.type.replace('_', ' ')}: ${pattern.signal} (${(pattern.strength * 100).toFixed(0)}%)`));
+        });
+      }
 
-            // DOM Pressure Analysis - LESS FREQUENT
-            const domPressureSignals = this.domPressureAnalyzer.onDepthUpdate(processedData);
-            if (domPressureSignals) {
-                domPressureSignals.forEach(signal => {
-                    console.log(chalk.red(`🏗️  ${signal.type.replace('_', ' ')}: ${signal.signal} (${(signal.strength * 100).toFixed(0)}%)`));
-                });
-            }
-        }
+      // DOM Pressure Analysis
+      const domPressureSignals = this.domPressureAnalyzer.onDepthUpdate(topLevels);
+      if (domPressureSignals) {
+        domPressureSignals.forEach(signal => {
+          console.log(chalk.red(`🏗️  ${signal.type.replace('_', ' ')}: ${signal.signal} (${(signal.strength * 100).toFixed(0)}%)`));
+        });
+      }
     }
+  }
+}
 
 
     async processBarClose(finalizedBar, analytics) {
